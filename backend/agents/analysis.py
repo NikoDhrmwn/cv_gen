@@ -71,6 +71,25 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     6. CIRCLE PROGRESS: Circular progress indicators
        - Use "slider" type
     
+    ========================================
+    CRITICAL DATA BINDING RULE (MANDATORY)
+    ========================================
+    ALL proficiency indicators MUST use {{level}} or {{level_pct}} in the HTML.
+    You have FULL FREEDOM for the VISUAL RENDERING, but the DATA MUST BE BOUND.
+    
+    VALID EXAMPLES (creative freedom preserved):
+    - DOT OVERLAY: <div style="width:{{level_pct}}%"><span>●●●●●</span></div>
+    - PROGRESS BAR: <div class="bar-fill" style="width:{{level_pct}}%"></div>
+    - CSS STARS: <div class="stars" style="--rating: {{level_pct}};"></div>
+    - DOTSARRAY LOOP: {{#dotsArray}}<span class="dot {{#filled}}filled{{/filled}}">●</span>{{/dotsArray}}
+    
+    INVALID (ABSOLUTELY FORBIDDEN):
+    - HARDCODED: <span>●●●●●●●●●○</span>  <!-- NO DATA BINDING! This NEVER updates! -->
+    - STATIC: <span class="filled">●●●●●</span><span class="empty">○○○○○</span>  <!-- BROKEN! -->
+    
+    If you output hardcoded symbols without {{level}}/{{level_pct}}/{{dotsArray}}, the form editor
+    will NOT sync with the preview. This is a CRITICAL BUG that you MUST avoid.
+    
     LAYOUT DETECTION:
     1. SIDEBAR VS HEADER: Check if the photo/name is inside the colored sidebar or in a white header.
     2. FULL HEIGHT SIDEBAR: If the sidebar color goes from the very top to the very bottom:
@@ -303,10 +322,32 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
          <span class="stars-filled" style="width: calc({{rating}} * 20%);">★★★★★</span>
        </div>
     
-    7. Include Google Fonts if needed (via @import in style tag)
-    8. MAKE ALL URLS CLICKABLE with proper <a> tags
-    9. Email = mailto: links, Phone = tel: links
-    10. Profile images: Always use "object-fit: cover;"
+    7. For CIRCULAR PROGRESS (Ring/Dial indicators) - CRITICAL:
+       THESE REQUIRE SPECIAL CSS BINDING via conic-gradient or SVG.
+       
+       OPTION A: Conic Gradient (Recommended for simplicity):
+       <div class="circle-progress" style="background: conic-gradient(#D4A24E 0% {{level_pct}}%, #374151 {{level_pct}}% 100%); width:60px; height:60px; border-radius:50%;">
+         <span class="circle-value">{{level_pct}}%</span>
+       </div>
+       CSS for inner circle mask (in your <style> tag):
+       .circle-progress { position: relative; display: flex; align-items: center; justify-content: center; }
+       .circle-progress::after { content:''; position:absolute; width:80%; height:80%; background:#1a1a2e; border-radius:50%; }
+       .circle-progress .circle-value { position:relative; z-index:1; font-weight:bold; }
+       
+       OPTION B: SVG with stroke-dasharray:
+       <svg viewBox="0 0 36 36" class="circular-chart">
+         <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#374151" stroke-width="3"/>
+         <path class="circle-fill" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#D4A24E" stroke-width="3" stroke-dasharray="{{level_pct}}, 100"/>
+         <text x="18" y="20.35" class="percentage" text-anchor="middle">{{level_pct}}%</text>
+       </svg>
+       
+       INVALID (BROKEN - ring won't update):
+       <div class="circle" style="background: conic-gradient(gold 80%, gray 80%);">80%</div>  <!-- HARDCODED! -->
+    
+    8. Include Google Fonts if needed (via @import in style tag)
+    9. MAKE ALL URLS CLICKABLE with proper <a> tags
+    10. Email = mailto: links, Phone = tel: links
+    11. Profile images: Always use "object-fit: cover;"
     
     CUSTOM SECTIONS - CRITICAL FOR USER FLEXIBILITY:
     You MUST include a {{#customSections}} block in your HTML template that:

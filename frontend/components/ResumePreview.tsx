@@ -140,41 +140,64 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
 
     const basics = resumeData.basics || {};
 
-    // Normalize data helper (e.g. converting 1-5 ratings to percentages)
+    // Normalize data helper - FIELD AGNOSTIC
+    // Detects ANY numeric field that looks like a rating/level/proficiency
     const normalizeLevel = (item: any) => {
-      if (item.level !== undefined) {
-        let lvl = parseInt(item.level);
-        if (isNaN(lvl)) return item;
+      // List of common field names for ratings (agent can use any of these)
+      const ratingFields = ['level', 'rating', 'proficiency', 'score', 'percent', 'progress', 'value', 'skill_level', 'proficiency_level'];
 
-        // Auto-detect scale and normalize percentages
-        let pct = lvl;
-        let max = 100;
-        let dotsCount = 5; // Default to 5 dots if ambiguous
+      // Find the first numeric rating field in the item
+      let fieldName: string | null = null;
+      let rawValue: number | null = null;
 
-        if (lvl <= 5) {
-          pct = lvl * 20;
-          max = 5;
-          dotsCount = 5;
-        } else if (lvl <= 10) {
-          pct = lvl * 10;
-          max = 10;
-          dotsCount = 10; // Use 10 dots if likely on 10-point scale
-        } else {
-          // It's a percentage (0-100)
-          max = 100;
-          dotsCount = 5; // Default visual representation for % is 5 dots
+      for (const field of ratingFields) {
+        if (item[field] !== undefined) {
+          const parsed = parseInt(item[field]);
+          if (!isNaN(parsed)) {
+            fieldName = field;
+            rawValue = parsed;
+            break;
+          }
         }
-
-        // Generate dots array for templating
-        // Calculate how many dots should be filled based on percentage
-        const fillCount = Math.round((pct / 100) * dotsCount);
-        const dotsArray = Array.from({ length: dotsCount }).map((_, i) => ({
-          filled: i < fillCount
-        }));
-
-        return { ...item, level_pct: pct, level: lvl, dotsArray };
       }
-      return item;
+
+      // If no rating field found, return item as-is
+      if (fieldName === null || rawValue === null) {
+        return item;
+      }
+
+      // Auto-detect scale and normalize to percentage
+      let pct = rawValue;
+      let dotsCount = 5;
+
+      if (rawValue <= 5) {
+        pct = rawValue * 20;
+        dotsCount = 5;
+      } else if (rawValue <= 10) {
+        pct = rawValue * 10;
+        dotsCount = 10;
+      } else {
+        // It's already a percentage (0-100)
+        dotsCount = 5;
+      }
+
+      // Generate dots array for templating
+      const fillCount = Math.round((pct / 100) * dotsCount);
+      const dotsArray = Array.from({ length: dotsCount }).map((_, i) => ({
+        filled: i < fillCount
+      }));
+
+      // Return item with ALL possible normalized fields (agent can use whichever)
+      return {
+        ...item,
+        level: rawValue,
+        level_pct: pct,
+        rating: rawValue,
+        rating_pct: pct,
+        proficiency: rawValue,
+        proficiency_pct: pct,
+        dotsArray
+      };
     };
 
     const renderData = {
@@ -243,92 +266,83 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
             margin-bottom: 0.2em;
         }
 
-        /* PRINT STYLES */
+        /* STRICT PRINT STYLES */
         @media print {
             @page {
+                size: A4;
                 margin: 0;
             }
-            body {
-                margin: 0;
-                padding: 0;
+            html, body {
+                margin: 0 !important;
+                padding: 0 !important;
                 -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
-                background: white; /* Ensure bg is white for print */
+                background: white !important;
+                background-image: none !important; /* Remove gray desk background */
             }
             
-            /* HIDE PREVIEW MARKERS */
-            .page-break-marker, .page-break-label, .print-spacer {
+            /* HIDE ALL PREVIEW MARKERS AND LABELS */
+            .page-break-marker, .page-break-marker *, .page-break-label, .print-spacer {
                 display: none !important;
+                visibility: hidden !important;
+                height: 0 !important;
+                overflow: hidden !important;
             }
 
-            /* Ensure full height layout */
-            html, body {
-                height: 100%;
-                min-height: 100%;
-            }
-            .cv-container {
-                min-height: 100%;
-                height: auto;
-                display: grid; /* Maintain grid layout */
+            /* Logical Breaking - The Core of the Logic */
+            section, .section, .custom-section {
+                break-inside: auto; /* Allow sections to split */
             }
             
-            /* Force Sidebar to stretch */
-            #cv-sidebar, .sidebar {
-               min-height: 100vh; /* Force it to at least fill the page */
-               height: 100%; 
+            /* BUT keep these atomic units together */
+            .job, .education-item, .project, .custom-item, .skill-group, li {
+                break-inside: avoid; 
+                page-break-inside: avoid;
             }
 
-            /* PRINT STYLES */
-            section, .section, .item, .job, .education-item, div[class*="item"] {
-                /* Allow breaking inside these containers so they can fill the page */
-                break-inside: auto !important; 
-                page-break-inside: auto !important;
-            }
-            
-            /* Protect atomic elements from splitting awkwardy */
-            p, li {
-                orphans: 2;
-                widows: 2;
-            }
-
-            /* Keep headers with their content */
-            h1, h2, h3, h4, h5, h6, .job-head, .job-sub, .date-location {
-                break-after: avoid !important;
-                page-break-after: avoid !important;
-                break-inside: avoid !important;
-            }
-            h1, h2, h3, h4, h5, h6 {
+            /* Headers stick to their content */
+            h1, h2, h3, h4, h5, h6, .section-title {
                 break-after: avoid;
                 page-break-after: avoid;
             }
+            
+            /* Safe Defaults */
+            p {
+                orphans: 2;
+                widows: 2;
+            }
         }
 
-        /* PAGED PREVIEW SIMULATION (Screen Only) */
+        /* SCREEN PREVIEW - WYSIWYG SIMULATION */
         @media screen {
             body {
-                background: #525659;
+                background: #525659; /* Dark Desk Background */
+                margin: 0;
+                padding: 40px 0;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                padding: 20px 0;
+                min-height: 100vh;
             }
-            html {
-                 height: auto;
-                 min-height: 100%;
+
+            /* The Paper "Sheet" Look */
+            /* We treat the body children or wrapper as the paper stream */
+            /* Since we can't easily split DOM, we use a Visual Background Trick */
+            body {
+                 /* A4 visual simulation */
+                 background-image: linear-gradient(#525659 20px, transparent 20px),
+                                   linear-gradient(white 0px, white 297mm, #525659 297mm, #525659 100%);
+                 background-size: 100% 100%, 210mm calc(297mm + 20px); 
+                 background-position: top center, top center 20px;
+                 background-repeat: repeat-y;
             }
+            
+            /* Enforce width constraint */
             body > * {
-                 max-width: 210mm !important; 
-            }
-            
-            /* Visual Page Breaks - JS will inject these now */
-            
-            /* Better Page Sheet Look */
-            body > div:first-child { 
-                min-height: 297mm;
-                background: white;
-                box-shadow: 0 0 10px rgba(0,0,0,0.5);
-                margin-bottom: 20px;
-                position: relative; 
+                max-width: 210mm !important;
+                box-sizing: border-box;
+                /* Add padding to match typical print margins if template is full bleed */
+                /* But most templates handle their own padding. We just constrain width. */
             }
         }
       </style>
@@ -341,16 +355,24 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                  commentingEnabled = e.data.enabled;
                  document.body.style.cursor = commentingEnabled ? 'crosshair' : 'default';
              }
+             if (e.data.type === 'CHECK_OVERFLOW') {
+                const docHeight = document.body.scrollHeight;
+                const A4_HEIGHT_PX = 1122;
+                const isOverflowing = docHeight > A4_HEIGHT_PX + 20;
+                
+                window.parent.postMessage({
+                    type: 'OVERFLOW_RESULT',
+                    isOverflowing: isOverflowing,
+                    docHeight: docHeight
+                }, '*');
+            }
         });
 
         document.addEventListener('mouseover', (e) => {
             if (!commentingEnabled) return;
             const target = e.target;
-            // Highlight block-level elements or meaningful text containers
             if (target.tagName === 'P' || target.tagName === 'H1' || target.tagName === 'H2' || target.tagName === 'H3' || target.tagName === 'DIV' || target.tagName === 'SPAN') {
                  target.classList.add('comment-highlight');
-                 
-                 // Remove from others
                  document.querySelectorAll('.comment-highlight').forEach(el => {
                      if (el !== target) el.classList.remove('comment-highlight');
                  });
@@ -366,51 +388,32 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
         let lastClickTime = 0;
         document.addEventListener('click', (e) => {
             if (!commentingEnabled) return;
-            
-            // Debounce (prevent double firing)
             const now = Date.now();
             if (now - lastClickTime < 500) return;
             lastClickTime = now;
-
             e.preventDefault();
             e.stopPropagation();
 
             const target = e.target;
-            
-            // Get clean text context (limit length)
-            const textContext = target.innerText.substring(0, 100).replace(/\s+/g, ' ').trim();
-            
-            // Attempt to find nearest section ID with stricter logic
+            const textContext = target.innerText.substring(0, 100).replace(/\\s+/g, ' ').trim();
             let sectionSearch = target;
-            let sectionId = 'general'; // Default to general instead of unknown
-            
-            // Walk up limited levels to avoid matching the entire body
+            let sectionId = 'general';
             let levels = 0;
             while(sectionSearch && sectionSearch !== document.body && levels < 5) {
                  const classList = sectionSearch.classList ? Array.from(sectionSearch.classList).join(' ').toLowerCase() : '';
                  const tagName = sectionSearch.tagName;
-                 const text = sectionSearch.innerText?.toLowerCase() || '';
-                 
-                 // Priority 1: Semantic Attributes/Classes (if added by agent/parser)
                  if (classList.includes('education') || sectionSearch.id?.includes('education')) { sectionId = 'education'; break; }
                  if (classList.includes('work') || classList.includes('experience') || sectionSearch.id?.includes('work')) { sectionId = 'work'; break; }
                  if (classList.includes('skill') || sectionSearch.id?.includes('skill')) { sectionId = 'skills'; break; }
                  if (classList.includes('header') || classList.includes('profile') || tagName === 'H1') { sectionId = 'basics'; break; }
-
-                 // Priority 2: Section Titles (H2) nearby
-                 // If we are INSIDE a section, there is likely an H2 preceding us
-                 
                  levels++;
                  sectionSearch = sectionSearch.parentElement;
             }
-            
-            // Fallback: If still general, check if it looks like contact info
             if (sectionId === 'general') {
                 const lowerText = textContext.toLowerCase();
-                if (lowerText.includes('@') || lowerText.match(/\d{3}/)) sectionId = 'basics';
+                if (lowerText.includes('@') || lowerText.match(/\\d{3}/)) sectionId = 'basics';
                 else if (target.tagName === 'H1') sectionId = 'basics';
             }
-
             window.parent.postMessage({
                 type: 'PREVIEW_CLICK',
                 x: e.clientX,
@@ -420,56 +423,49 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
             }, '*');
         });
 
-        // --- OVERFLOW DETECTION ---
-        window.addEventListener('message', (e) => {
-            if (e.data.type === 'CHECK_OVERFLOW') {
-                const docHeight = document.body.scrollHeight;
-                const A4_HEIGHT_PX = 1122; // approx 297mm at 96dpi
-                const isOverflowing = docHeight > A4_HEIGHT_PX + 20; // 20px tolerance
-                
-                window.parent.postMessage({
-                    type: 'OVERFLOW_RESULT',
-                    isOverflowing: isOverflowing,
-                    docHeight: docHeight
-                }, '*');
-            }
-        });
-
-        // --- PAGINATION & MORPH ---
+        // --- PAGINATION MARKERS ---
         function applyPaginationFix() {
-            // ... (existing implementation)
+            document.querySelectorAll('.page-break-marker').forEach(el => el.remove());
+
             const A4_HEIGHT_MM = 297;
             const MMA_PX = 3.7795275591; 
-            const PAGE_HEIGHT_PX = A4_HEIGHT_MM * MMA_PX; // ~1122px
+            const PAGE_HEIGHT_PX = Math.ceil(A4_HEIGHT_MM * MMA_PX);
             
-            // Clean up old markers
-            document.querySelectorAll('.page-break-marker, .page-break-label, .print-spacer').forEach(el => el.remove());
-
-            // 1. Add Visual Markers for Preview
             const docHeight = document.body.scrollHeight;
             const numPages = Math.ceil(docHeight / PAGE_HEIGHT_PX);
             
-            for (let i = 1; i < numPages; i++) {
-                const top = i * PAGE_HEIGHT_PX;
-                
-                const marker = document.createElement('div');
-                marker.className = 'page-break-marker';
-                marker.style.top = top + 'px';
-                document.body.appendChild(marker);
-                
-                const label = document.createElement('div');
-                label.className = 'page-break-label';
-                label.style.top = (top - 20) + 'px';
-                label.innerText = 'PAGE ' + i + ' END / ' + (i+1) + ' START';
-                document.body.appendChild(label);
+            if (numPages > 1) {
+                for (let i = 1; i < numPages; i++) {
+                    const top = (i * PAGE_HEIGHT_PX);
+                    
+                    const marker = document.createElement('div');
+                    marker.className = 'page-break-marker';
+                    marker.style.position = 'absolute';
+                    marker.style.top = top + 'px';
+                    marker.style.left = '0';
+                    marker.style.width = '100%';
+                    marker.style.height = '1px';
+                    marker.style.borderTop = '2px dashed #ff4444';
+                    marker.style.zIndex = '9999';
+                    marker.style.pointerEvents = 'none';
+                    marker.style.opacity = '0.6';
+                    
+                    const label = document.createElement('div');
+                    label.innerText = 'PAGE BREAK';
+                    label.style.position = 'absolute';
+                    label.style.right = '0';
+                    label.style.top = '-20px';
+                    label.style.background = '#ff4444';
+                    label.style.color = 'white';
+                    label.style.fontSize = '10px';
+                    label.style.padding = '2px 6px';
+                    label.style.fontWeight = 'bold';
+                    
+                    marker.appendChild(label);
+                    document.body.appendChild(marker);
+                }
             }
-
-            // 2. [REMOVED] Aggressive JS Content Splitting
-            // We now rely entirely on CSS (break-inside: auto) to handle content flow.
-            // The previous logic was artificially forcing page breaks where they weren't needed.
-            // We only keep the visual markers (loop above) for the user's reference.
         }
-
 
         // Run on load and whenever content changes
         window.addEventListener('load', () => setTimeout(applyPaginationFix, 1000));
@@ -482,14 +478,11 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
             const parser = new DOMParser();
             const newDoc = parser.parseFromString(newHtml, 'text/html');
             
-            // Simple Morph Implementation
             function morph(oldNode, newNode) {
                 if (oldNode.nodeType !== newNode.nodeType) {
                     oldNode.replaceWith(newNode.cloneNode(true));
                     return;
                 }
-                
-                // Text Nodes
                 if (oldNode.nodeType === 3) {
                     if (oldNode.textContent !== newNode.textContent) {
                         oldNode.textContent = newNode.textContent;
@@ -500,32 +493,23 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                     }
                     return;
                 }
-
-                // Element Nodes
                 if (oldNode.nodeType === 1) {
                     if (oldNode.tagName !== newNode.tagName) {
                         oldNode.replaceWith(newNode.cloneNode(true));
                          return;
                     }
-                    
-                    // Update Attributes
                     Array.from(newNode.attributes).forEach(attr => {
                         oldNode.setAttribute(attr.name, attr.value);
                     });
-
-                    // Recurse children
                     const oldChildren = Array.from(oldNode.childNodes);
                     const newChildren = Array.from(newNode.childNodes);
-                    
                     for (let i = 0; i < Math.max(oldChildren.length, newChildren.length); i++) {
                         if (!oldChildren[i]) {
                              oldNode.appendChild(newChildren[i].cloneNode(true));
-                            // Animate entry
                             if (oldNode.lastChild.classList) {
                                 oldNode.lastChild.classList.add('typing-effect');
                             }
                         } else if (!newChildren[i]) {
-                            // Remove old
                             oldChildren[i].remove();
                         } else {
                             morph(oldChildren[i], newChildren[i]);
@@ -534,9 +518,8 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                 }
             }
 
-            // Start Morphing from Body
             morph(document.body, newDoc.body);
-            // Also head styles if any changed, but mostly body
+            setTimeout(applyPaginationFix, 100);
         });
 
         // Intercept all link clicks to open in new tab
@@ -546,7 +529,6 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                 e.preventDefault();
                 let href = link.getAttribute('href');
                 if (href) {
-                     // Fix missing protocol
                     if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
                         href = 'https://' + href;
                     }

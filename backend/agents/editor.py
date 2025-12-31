@@ -34,9 +34,10 @@ def refine_resume_data(current_data: dict, user_request: str, image_base64: str 
     3. **CREATIVE FREEDOM**: You have full control to rewrite text, split bullet points, or merge them to make the CV look professional.
     4. **VISUAL CONTEXT**: If an image is provided, use it to infer layout needs (e.g. "it looks empty" -> add more detailed descriptions).
     5. **LAYOUT & BALANCE (CRITICAL)**:
-       - **Maximize Page 1**: Keep the layout dense. Only move content to Page 2 if it absolutely doesn't fit.
-       - **FILL GAPS**: If Page 1 ends up with empty space, you are AUTHORIZED to generate *new, relevant, high-quality* bullet points for the most recent job or expand the summary/profile to visual fill the page.
-       - **Split Lists**: You can split long lists (like Skills) across pages if necessary, but prefer keeping them together on Page 1 if possible.
+       - **Natural Flow**: Allow content to flow naturally to Page 2 if needed. Do not compress content forcefully just to fit it on one page.
+       - **Avoid Orphans**: Ensure bullet lists for a single job are substantial enough to not look awkward if split across pages.
+       - **FILL GAPS**: If Page 1 ends up with a large empty space (e.g. >30%), you are AUTHORIZED to generate *new, relevant, high-quality* bullet points for the most recent job or expand the summary/profile to visually fill the page.
+       - **Split Lists**: You can split long lists (like Skills) across pages if necessary.
     6. **OUTPUT**: Return ONLY the valid JSON of the updated resume data.
        - Include a `_reasoning` field at the root level explaining your changes briefly.
     

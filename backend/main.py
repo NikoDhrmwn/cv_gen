@@ -202,13 +202,31 @@ def generate_pdf_endpoint(request: PdfRequest):
         if not html_content:
              html_content = "<html><body><h1>Backend: No HTML received</h1></body></html>"
 
+        # SANITIZE HTML: Remove page-break markers before PDF generation
+        import re
+        # Remove all elements with class containing "page-break-marker" (and their children)
+        html_content = re.sub(
+            r'<div[^>]*class="[^"]*page-break-marker[^"]*"[^>]*>.*?</div>',
+            '',
+            html_content,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        # Also remove any standalone markers without content
+        html_content = re.sub(
+            r'<div[^>]*class="[^"]*page-break-marker[^"]*"[^>]*/?>',
+            '',
+            html_content,
+            flags=re.IGNORECASE
+        )
+
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
             
-            # Use inline styles or ensure assets are reachable
-            page.set_content(html_content, wait_until="networkidle")
-            page.emulate_media(media="screen") 
+            # 'networkidle' can hang if there are open connections (e.g. fonts, analytics, tracking)
+            # 'load' is usually sufficient for static content and safer from deadlocks.
+            page.set_content(html_content, wait_until="load", timeout=30000)
+            page.emulate_media(media="print") 
             
             pdf_bytes = page.pdf(
                 format="A4",

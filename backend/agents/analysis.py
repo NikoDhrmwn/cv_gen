@@ -385,7 +385,7 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash-exp",
+                model="gemini-3-flash-preview",
                 contents=[
                     types.Content(
                         role="user",
@@ -416,10 +416,6 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     if not response or not response.text:
         error_msg = f"Failed after {MAX_RETRIES} attempts. Last error: {last_error}"
         print(f"Error: {error_msg}")
-        
-        # Ensure logs directory exists
-        os.makedirs("logs", exist_ok=True)
-        
         with open("logs/error.log", "w", encoding="utf-8") as f:
             f.write(error_msg)
             if response:

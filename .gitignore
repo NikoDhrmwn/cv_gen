@@ -30,6 +30,7 @@ yarn-error.log*
 # Project specific
 backend/temp/
 backend/logs/
+!backend/logs/.gitkeep
 backend/assets/*.png
 !backend/assets/screenshot.png
 backend/screenshots/

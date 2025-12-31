@@ -449,9 +449,10 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                 document.body.appendChild(label);
             }
 
-            // 2. Aggressive Content Splitting
-            // Select large blocks but also smaller items
-            const elements = document.querySelectorAll('section, .section, .item, .job, .education-item, div[class*="item"]');
+            // 2. Intelligent Content Splitting (Atomic Items Only)
+            // We consciously EXCLUDE 'section' and '.section' to allow them to span pages.
+            // We only want to prevent specific atoms (like a single job entry) from being sliced.
+            const elements = document.querySelectorAll('.item, .job, .education-item, div[class*="item"], h2, h3, .section-title');
             
             elements.forEach(el => {
                 // We calculate position relative to the main container (usually body > div:first-child)
@@ -476,17 +477,24 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                     const pageLimit = (startPage + 1) * PAGE_HEIGHT_PX;
                     const overlap = absoluteBottom - pageLimit;
 
-                    // Decision: Push ONLY if it's smaller than a page (avoid infinite loops for giant blocks)
-                    // AND if the overlap is significant (> 20px)
-                    if (height < PAGE_HEIGHT_PX && overlap > 20) {
+                    // Decision Logic:
+                    // 1. If it's a Heading (h2, h3), PUSH IT if it's near the bottom (orphan check).
+                    // 2. If it's a Content Item, PUSH IT to keep it whole.
+                    // 3. Exception: If the item is HUGE (larger than a page), do NOT push it (let it break).
+                    
+                    const isHeading = el.tagName.startsWith('H') || el.classList.contains('section-title');
+                    
+                    if (height < (PAGE_HEIGHT_PX * 0.8)) { // Only move if it fits on a page
                          const distanceToNextPage = pageLimit - absoluteTop;
                          
+                         // Create spacer
                          const spacer = document.createElement('div');
                          spacer.className = 'print-spacer';
-                         spacer.style.height = (distanceToNextPage + 30) + 'px'; // +30px buffer
+                         spacer.style.height = (distanceToNextPage + 10) + 'px'; // +10px buffer
                          spacer.style.width = '100%';
-                         spacer.style.breakBefore = 'always'; /* Help print engine too */
                          
+                         // For headers, we might want to push even if overlap is small
+                         // For items, only push if it's a meaningful break
                          el.parentNode.insertBefore(spacer, el);
                     }
                 }

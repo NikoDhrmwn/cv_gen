@@ -278,9 +278,24 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                height: 100%; 
             }
 
+            /* PRINT STYLES */
             section, .section, .item, .job, .education-item, div[class*="item"] {
-                break-inside: avoid;
-                page-break-inside: avoid;
+                /* Allow breaking inside these containers so they can fill the page */
+                break-inside: auto !important; 
+                page-break-inside: auto !important;
+            }
+            
+            /* Protect atomic elements from splitting awkwardy */
+            p, li {
+                orphans: 2;
+                widows: 2;
+            }
+
+            /* Keep headers with their content */
+            h1, h2, h3, h4, h5, h6, .job-head, .job-sub, .date-location {
+                break-after: avoid !important;
+                page-break-after: avoid !important;
+                break-inside: avoid !important;
             }
             h1, h2, h3, h4, h5, h6 {
                 break-after: avoid;
@@ -449,56 +464,10 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                 document.body.appendChild(label);
             }
 
-            // 2. Intelligent Content Splitting (Atomic Items Only)
-            // We consciously EXCLUDE 'section' and '.section' to allow them to span pages.
-            // We only want to prevent specific atoms (like a single job entry) from being sliced.
-            const elements = document.querySelectorAll('.item, .job, .education-item, div[class*="item"], h2, h3, .section-title');
-            
-            elements.forEach(el => {
-                // We calculate position relative to the main container (usually body > div:first-child)
-                // But simplified: use offsetTop (relative to nearest positioned ancestor)
-                
-                // Find absolute top roughly
-                let absoluteTop = 0;
-                let ref = el;
-                while(ref && ref !== document.body) {
-                    absoluteTop += ref.offsetTop;
-                    ref = ref.offsetParent;
-                }
-                
-                const height = el.getBoundingClientRect().height;
-                const absoluteBottom = absoluteTop + height;
-                
-                const startPage = Math.floor(absoluteTop / PAGE_HEIGHT_PX);
-                const endPage = Math.floor(absoluteBottom / PAGE_HEIGHT_PX);
-                
-                if (startPage !== endPage) {
-                    // It crosses a line!
-                    const pageLimit = (startPage + 1) * PAGE_HEIGHT_PX;
-                    const overlap = absoluteBottom - pageLimit;
-
-                    // Decision Logic:
-                    // 1. If it's a Heading (h2, h3), PUSH IT if it's near the bottom (orphan check).
-                    // 2. If it's a Content Item, PUSH IT to keep it whole.
-                    // 3. Exception: If the item is HUGE (larger than a page), do NOT push it (let it break).
-                    
-                    const isHeading = el.tagName.startsWith('H') || el.classList.contains('section-title');
-                    
-                    if (height < (PAGE_HEIGHT_PX * 0.8)) { // Only move if it fits on a page
-                         const distanceToNextPage = pageLimit - absoluteTop;
-                         
-                         // Create spacer
-                         const spacer = document.createElement('div');
-                         spacer.className = 'print-spacer';
-                         spacer.style.height = (distanceToNextPage + 10) + 'px'; // +10px buffer
-                         spacer.style.width = '100%';
-                         
-                         // For headers, we might want to push even if overlap is small
-                         // For items, only push if it's a meaningful break
-                         el.parentNode.insertBefore(spacer, el);
-                    }
-                }
-            });
+            // 2. [REMOVED] Aggressive JS Content Splitting
+            // We now rely entirely on CSS (break-inside: auto) to handle content flow.
+            // The previous logic was artificially forcing page breaks where they weren't needed.
+            // We only keep the visual markers (loop above) for the user's reference.
         }
 
 

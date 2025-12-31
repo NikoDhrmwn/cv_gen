@@ -1,6 +1,36 @@
-venv/
-__pycache__/
-*.pyc
-logs/
+# System
 .DS_Store
-*.log
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Node
+node_modules/
+.next/
+out/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+backend/temp/
+backend/logs/
+backend/assets/*.png
+!backend/assets/screenshot.png
+backend/screenshots/
+frontend/.env.local

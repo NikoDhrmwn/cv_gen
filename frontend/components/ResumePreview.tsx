@@ -253,7 +253,31 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
                 padding: 0;
                 -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
+                background: white; /* Ensure bg is white for print */
             }
+            
+            /* HIDE PREVIEW MARKERS */
+            .page-break-marker, .page-break-label, .print-spacer {
+                display: none !important;
+            }
+
+            /* Ensure full height layout */
+            html, body {
+                height: 100%;
+                min-height: 100%;
+            }
+            .cv-container {
+                min-height: 100%;
+                height: auto;
+                display: grid; /* Maintain grid layout */
+            }
+            
+            /* Force Sidebar to stretch */
+            #cv-sidebar, .sidebar {
+               min-height: 100vh; /* Force it to at least fill the page */
+               height: 100%; 
+            }
+
             section, .section, .item, .job, .education-item, div[class*="item"] {
                 break-inside: avoid;
                 page-break-inside: avoid;

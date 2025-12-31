@@ -10,6 +10,9 @@
 
 ## // SYSTEM STATUS
 
+
+> **[TRY IT LIVE](https://cv-gen-eight.vercel.app/)** 
+
 | MODULE | STATUS |
 | :--- | :--- |
 | **CORE_ENGINE** | `ONLINE` |

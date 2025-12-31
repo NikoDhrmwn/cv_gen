@@ -44,7 +44,8 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
        - NEVER use fixed heights (height: 100vh or height: 1000px) for the main container. Use min-height: 100vh.
        - Sidebar background must stretch infinitely (use flexbox or grid with stretch).
     2. PREVENT BAD BREAKS: Add this CSS to your <style>:
-       .cv-section, .kn-section { break-inside: avoid; page-break-inside: avoid; }
+       .cv-section, .kn-section { break-inside: auto; page-break-inside: auto; } /* MUST allow sections to split across pages */
+       .item, .job, .education-item, li { break-inside: avoid; page-break-inside: avoid; } /* Keep individual items together */
        h1, h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
     3. NO STRETCHED IMAGES: All user images must have `object-fit: cover` and explicit aspect ratios.
     4. ROBUST LAYOUT: If the content is long, the design must gracefully flow to Page 2 without overlapping or breaking the sidebar.

@@ -146,12 +146,33 @@ const ResumePreview = forwardRef<HTMLIFrameElement, ResumePreviewProps>(({ initi
         let lvl = parseInt(item.level);
         if (isNaN(lvl)) return item;
 
-        // Auto-detect scale
+        // Auto-detect scale and normalize percentages
         let pct = lvl;
-        if (lvl <= 5) pct = lvl * 20;
-        else if (lvl <= 10) pct = lvl * 10;
+        let max = 100;
+        let dotsCount = 5; // Default to 5 dots if ambiguous
 
-        return { ...item, level_pct: pct, level: lvl };
+        if (lvl <= 5) {
+          pct = lvl * 20;
+          max = 5;
+          dotsCount = 5;
+        } else if (lvl <= 10) {
+          pct = lvl * 10;
+          max = 10;
+          dotsCount = 10; // Use 10 dots if likely on 10-point scale
+        } else {
+          // It's a percentage (0-100)
+          max = 100;
+          dotsCount = 5; // Default visual representation for % is 5 dots
+        }
+
+        // Generate dots array for templating
+        // Calculate how many dots should be filled based on percentage
+        const fillCount = Math.round((pct / 100) * dotsCount);
+        const dotsArray = Array.from({ length: dotsCount }).map((_, i) => ({
+          filled: i < fillCount
+        }));
+
+        return { ...item, level_pct: pct, level: lvl, dotsArray };
       }
       return item;
     };

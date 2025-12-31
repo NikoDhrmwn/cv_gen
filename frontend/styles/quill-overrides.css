@@ -1,0 +1,39 @@
+/* Minimal Quill Overrides for Brutalist Theme */
+.minimal-quill .ql-toolbar {
+    border: 1px solid var(--border-dim) !important;
+    border-bottom: none !important;
+    background: var(--bg-card);
+}
+
+.minimal-quill .ql-container {
+    border: 1px solid var(--border-dim) !important;
+    background: var(--bg-root);
+    font-family: inherit;
+    font-size: 14px;
+}
+
+.minimal-quill .ql-editor {
+    min-height: 200px;
+    color: var(--text-main);
+}
+
+/* Toolbar Icons */
+.minimal-quill .ql-stroke {
+    stroke: var(--text-muted) !important;
+}
+
+.minimal-quill .ql-fill {
+    fill: var(--text-muted) !important;
+}
+
+.minimal-quill .ql-picker {
+    color: var(--text-muted) !important;
+}
+
+.minimal-quill button:hover .ql-stroke {
+    stroke: var(--text-main) !important;
+}
+
+.minimal-quill button.ql-active .ql-stroke {
+    stroke: var(--primary) !important;
+}

@@ -10,8 +10,8 @@
 
 ## // SYSTEM STATUS
 
-| MODULE | STATUS | VERSION |
-| :--- | :--- | :--- |
+| MODULE | STATUS |
+| :--- | :--- |
 | **CORE_ENGINE** | `ONLINE` |
 | **UI_FRAMEWORK** | `ONLINE` |
 | **AGENT_SWARM** | `PARTIAL` |

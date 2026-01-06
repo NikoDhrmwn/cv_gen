@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
+import tempfile
 from datetime import datetime
 from io import BytesIO
 from pypdf import PdfReader
@@ -158,20 +159,24 @@ async def generate_cv_upload(file: UploadFile = File(...), query: str = "Resumé
         metadata={'filename': file.filename, 'query': query}
     )
     
+    # Create temporary file with proper suffix
+    file_extension = os.path.splitext(file.filename)[1] or '.tmp'
+    temp_file = None
+    
     try:
-        # Save uploaded file
-        filename = f"upload_{int(datetime.now().timestamp())}_{file.filename}"
-        filepath = os.path.join("assets", filename)
+        # Create temporary file that will be deleted after processing
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
+        temp_path = temp_file.name
         
-        with open(filepath, "wb") as f:
-            f.write(await file.read())
-            
-        screenshot_path = filepath
+        # Write uploaded content to temp file
+        file_content = await file.read()
+        temp_file.write(file_content)
+        temp_file.close()
         
         # 2. Analysis - Extract form structure
         from agents.analysis import analyze_screenshot
         
-        result = analyze_screenshot(screenshot_path)
+        result = analyze_screenshot(temp_path)
         if not result:
             return {"error": "Analysis failed - could not parse the uploaded template."}
         
@@ -181,7 +186,7 @@ async def generate_cv_upload(file: UploadFile = File(...), query: str = "Resumé
             role='assistant',
             content="Successfully analyzed uploaded template",
             message_type='build',
-            metadata={'template_saved': filepath}
+            metadata={'filename': file.filename}
         )
         
         # Add metadata
@@ -189,7 +194,7 @@ async def generate_cv_upload(file: UploadFile = File(...), query: str = "Resumé
             "discovery": {
                 "source": "upload",
                 "search_query": query,
-                "selected_template": filename
+                "selected_template": file.filename
             },
             "analyzed_at": datetime.now().isoformat(),
             "session_id": session_id
@@ -198,6 +203,13 @@ async def generate_cv_upload(file: UploadFile = File(...), query: str = "Resumé
         return result
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)}"}
+    finally:
+        # Clean up: delete temporary file
+        if temp_file and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to delete temp file {temp_path}: {cleanup_error}")
 
 @app.post("/import-cv")
 async def import_cv_endpoint(file: UploadFile = File(...)):

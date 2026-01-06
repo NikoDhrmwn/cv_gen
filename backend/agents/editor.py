@@ -7,10 +7,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def refine_resume_data(current_data: dict, user_request: str, image_base64: str = None) -> dict:
+def refine_resume_data(current_data: dict, user_request: str, image_base64: str = None, chat_context: str = None) -> dict:
     """
     Uses Gemini to modify the resume data based on a user's natural language request.
-    Supports visual context via screenshots.
+    Supports visual context via screenshots and conversation history.
+    
+    Args:
+        current_data: Current resume data dictionary
+        user_request: User's edit request
+        image_base64: Optional screenshot of current CV state
+        chat_context: Optional formatted chat history for context
     """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -24,21 +30,24 @@ def refine_resume_data(current_data: dict, user_request: str, image_base64: str 
 
     USER REQUEST:
     "{user_request}"
+    
+    {chat_context if chat_context else ""}
 
     INSTRUCTIONS:
     1. **ANALYZE & PLAN**: First, think about the best way to structure the resume. Does the user's request fit into standard sections?
-    2. **SCHEMA AWARENESS**:
+    2. **CONTEXT AWARENESS**: Review the conversation history above (if provided). The user's request may reference previous edits or discussions. Ensure your changes are consistent with the overall conversation flow.
+    3. **SCHEMA AWARENESS**:
        - Standard Sections: 'basics', 'work', 'education', 'skills', 'languages', 'projects', 'certificates', 'awards', 'interests', 'references'.
        - **ALWAYS** use these standard sections if the content fits (e.g., use 'languages' for Language skills, NOT a custom "Spoken Languages" section).
        - **ONLY** use 'customSections' for truly unique content that doesn't fit standard schemas (e.g. "Speaking Engagements", "Patents").
-    3. **CREATIVE FREEDOM**: You have full control to rewrite text, split bullet points, or merge them to make the CV look professional.
-    4. **VISUAL CONTEXT**: If an image is provided, use it to infer layout needs (e.g. "it looks empty" -> add more detailed descriptions).
-    5. **LAYOUT & BALANCE (CRITICAL)**:
+    4. **CREATIVE FREEDOM**: You have full control to rewrite text, split bullet points, or merge them to make the CV look professional.
+    5. **VISUAL CONTEXT**: If an image is provided, use it to infer layout needs (e.g. "it looks empty" -> add more detailed descriptions).
+    6. **LAYOUT & BALANCE (CRITICAL)**:
        - **Natural Flow**: Allow content to flow naturally to Page 2 if needed. Do not compress content forcefully just to fit it on one page.
        - **Avoid Orphans**: Ensure bullet lists for a single job are substantial enough to not look awkward if split across pages.
        - **FILL GAPS**: If Page 1 ends up with a large empty space (e.g. >30%), you are AUTHORIZED to generate *new, relevant, high-quality* bullet points for the most recent job or expand the summary/profile to visually fill the page.
        - **Split Lists**: You can split long lists (like Skills) across pages if necessary.
-    6. **OUTPUT**: Return ONLY the valid JSON of the updated resume data.
+    7. **OUTPUT**: Return ONLY the valid JSON of the updated resume data.
        - Include a `_reasoning` field at the root level explaining your changes briefly.
     
     CURRENT RESUME DATA (JSON):

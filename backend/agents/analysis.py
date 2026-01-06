@@ -38,6 +38,8 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     4. Support print/PDF export with @media print styles
     5. PRIMARY TARGET IS A4 PAPER (210mm width). The layout MUST be preserved at 794px width (A4 @ 96dpi).
     6. DETECT ALL SPECIAL UI ELEMENTS - this is your PRIMARY TASK
+    7. DO NOT USE GENERIC LAYOUTS. YOU MUST COPY THE SIDEBARS, HEADER STYLES, AND FONTS FROM THE IMAGE.
+    8. IF THE IMAGE HAS A LEFT/RIGHT SIDEBAR, YOUR HTML MUST HAVE A CSS GRID/FLEX SIDEBAR.
     
     CRITICAL PAGINATION & ROBUSTNESS RULES:
     1. MULTI-PAGE READY: Do NOT assume content fits on one page. The template must scale vertically.
@@ -420,6 +422,24 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     - Custom sections MUST use the SAME CSS classes and styling as your predefined sections
     """
 
+    import mimetypes
+    
+    # 1. Try guessing from extension first (more reliable for uploads)
+    if image_path.lower().endswith(".pdf"):
+        mime_type = "application/pdf"
+    else:
+        mime_type, _ = mimetypes.guess_type(image_path)
+    
+    # 2. Fallback
+    if not mime_type:
+        mime_type = "image/png" 
+    
+    print(f"DEBUG: Analyzing file: {image_path} with mime_type: {mime_type}")
+
+    # Prompt adjustment for PDF
+    if "pdf" in mime_type:
+         prompt += "\nNOTE: This is a PDF file. Analyze the first page as the visual template."
+
     # Retry loop for API calls
     response = None
     last_error = None
@@ -427,13 +447,13 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
     for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model="gemini-3-flash-preview", # Updated to Gemini 3 Flash Preview per user request
                 contents=[
                     types.Content(
                         role="user",
                         parts=[
                             types.Part.from_text(text=prompt),
-                            types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
                         ]
                     )
                 ]

@@ -7,6 +7,8 @@ from datetime import datetime
 from io import BytesIO
 from pypdf import PdfReader
 from agents.parser import parse_cv_content
+from agents.chat_manager import get_chat_manager
+import uuid
 
 import sys
 import asyncio
@@ -16,6 +18,9 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 app = FastAPI(title="Agentic CV Generator API")
+
+# Initialize Chat Manager for conversation history
+chat_manager = get_chat_manager()
 
 # Configure CORS
 app.add_middleware(
@@ -75,6 +80,19 @@ async def generate_cv(request: GenerateRequest):
     """
     Phase 2: Generate form from selected template.
     """
+    # Create new session for this CV generation
+    session_id = str(uuid.uuid4())
+    chat_manager.create_session(session_id)
+    
+    # Record user's initial request
+    chat_manager.add_message(
+        session_id,
+        role='user',
+        content=f"Generate CV for role: {request.query}",
+        message_type='build',
+        metadata={'template_id': request.template_id, 'query': request.query}
+    )
+    
     screenshot_path = request.template_id
     
     # 2. Analysis - Extract form structure from the selected template
@@ -95,6 +113,18 @@ async def generate_cv(request: GenerateRequest):
         if not result:
             return {"error": "Analysis failed - could not parse the template."}
         
+        # Record builder agent response in chat history
+        chat_manager.add_message(
+            session_id,
+            role='assistant',
+            content="Successfully analyzed template and generated CV structure",
+            message_type='build',
+            metadata={
+                'template_analyzed': screenshot_path,
+                'sections_created': list(result.get('form_schema', {}).get('sections', [])) if result.get('form_schema') else []
+            }
+        )
+        
         # Add discovery metadata to result
         result["_meta"] = {
             "discovery": {
@@ -102,7 +132,67 @@ async def generate_cv(request: GenerateRequest):
                 "search_query": request.query,
                 "selected_template": request.template_id
             },
-            "analyzed_at": datetime.now().isoformat()
+            "analyzed_at": datetime.now().isoformat(),
+            "session_id": session_id  # Add session ID to response
+        }
+        
+        return result
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
+
+@app.post("/generate-upload")
+async def generate_cv_upload(file: UploadFile = File(...), query: str = "Resumé"):
+    """
+    Phase 2 (Variant): Generate form from UPLOADED template (Image/PDF).
+    """
+    # Create new session
+    session_id = str(uuid.uuid4())
+    chat_manager.create_session(session_id)
+    
+    # Record user upload action
+    chat_manager.add_message(
+        session_id,
+        role='user',
+        content=f"Uploaded custom template: {file.filename}",
+        message_type='build',
+        metadata={'filename': file.filename, 'query': query}
+    )
+    
+    try:
+        # Save uploaded file
+        filename = f"upload_{int(datetime.now().timestamp())}_{file.filename}"
+        filepath = os.path.join("assets", filename)
+        
+        with open(filepath, "wb") as f:
+            f.write(await file.read())
+            
+        screenshot_path = filepath
+        
+        # 2. Analysis - Extract form structure
+        from agents.analysis import analyze_screenshot
+        
+        result = analyze_screenshot(screenshot_path)
+        if not result:
+            return {"error": "Analysis failed - could not parse the uploaded template."}
+        
+        # Record builder agent response
+        chat_manager.add_message(
+            session_id,
+            role='assistant',
+            content="Successfully analyzed uploaded template",
+            message_type='build',
+            metadata={'template_saved': filepath}
+        )
+        
+        # Add metadata
+        result["_meta"] = {
+            "discovery": {
+                "source": "upload",
+                "search_query": query,
+                "selected_template": filename
+            },
+            "analyzed_at": datetime.now().isoformat(),
+            "session_id": session_id
         }
         
         return result
@@ -148,26 +238,57 @@ class RefineRequest(BaseModel):
     resume_data: dict
     user_request: str
     image_base64: str | None = None
+    session_id: str | None = None  # Add session ID for chat history
 
 @app.post("/refine")
 async def refine_cv(request: RefineRequest):
     """
-    Phase 3: Real-time AI editing of the CV data.
+    Phase 3: Real-time AI editing of the CV data with full conversation context.
     """
     from agents.editor import refine_resume_data
     
+    # Get or create session
+    session_id = request.session_id or str(uuid.uuid4())
+    if session_id not in chat_manager.sessions:
+        chat_manager.create_session(session_id)
+    
+    # Record user's edit request
+    chat_manager.add_message(
+        session_id,
+        role='user',
+        content=request.user_request,
+        message_type='edit'
+    )
+    
     try:
-        updated_data = refine_resume_data(request.resume_data, request.user_request, request.image_base64)
+        # Get chat history for context
+        chat_context = chat_manager.format_for_prompt(session_id, max_messages=15)
+        
+        updated_data = refine_resume_data(
+            request.resume_data,
+            request.user_request,
+            request.image_base64,
+            chat_context=chat_context  # Pass chat history
+        )
         if not updated_data:
              return {"error": "AI could not process the revision."}
         
-        return {"resume_data": updated_data}
+        # Record agent's response
+        chat_manager.add_message(
+            session_id,
+            role='assistant',
+            content=updated_data.get('_reasoning', 'Applied changes to CV'),
+            message_type='edit'
+        )
+        
+        return {"resume_data": updated_data, "session_id": session_id}
     except Exception as e:
         return {"error": f"Refinement failed: {str(e)}"}
 
 class ReorderRequest(BaseModel):
     html: str
     order: list[str]
+    session_id: str | None = None  # Add session ID
 
 @app.post("/reorder")
 async def reorder_endpoint(request: ReorderRequest):
@@ -176,11 +297,33 @@ async def reorder_endpoint(request: ReorderRequest):
     """
     from agents.layout import reorder_sections_ai
     
+    # Get or create session
+    session_id = request.session_id or str(uuid.uuid4())
+    if session_id not in chat_manager.sessions:
+        chat_manager.create_session(session_id)
+    
+    # Record user's rearrangement action
+    chat_manager.add_message(
+        session_id,
+        role='user',
+        content=f"Rearranged sections to new order: {', '.join(request.order[:5])}{'...' if len(request.order) > 5 else ''}",
+        message_type='rearrange',
+        metadata={'new_order': request.order}
+    )
+    
     new_html = reorder_sections_ai(request.html, request.order)
     if not new_html:
         return {"error": "Failed to reorder layout"}
+    
+    # Record successful reorder
+    chat_manager.add_message(
+        session_id,
+        role='assistant',
+        content="Successfully rearranged CV sections",
+        message_type='rearrange'
+    )
         
-    return {"html": new_html}
+    return {"html": new_html, "session_id": session_id}
 
 class PdfRequest(BaseModel):
     resume_data: dict

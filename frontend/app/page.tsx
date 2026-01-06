@@ -2,9 +2,27 @@
 
 import { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Terminal, ArrowRight, Loader2, Command, CheckCircle2, ChevronRight, Layout, Upload, Github, Image as ImageIcon, Trash2, XCircle, Sparkles, MessageSquare, Plus, RotateCcw, RotateCw, Download, Columns, Sidebar, Settings, Search, Play, X } from 'lucide-react';
+import { TypewriterText } from '@/components/TypewriterText';
+import { FullscreenConsoleLoader } from '@/components/FullscreenConsoleLoader';
+import { CinematicBuildLoader } from '@/components/CinematicBuildLoader';
+
+
+
+const SUBTITLE_VARIANTS = [
+  "Build a professional resume in seconds",             // English
+  "Crea un currículum profesional en segundos",         // Spanish
+  "Erstellen Sie in Sekundenschnelle einen Lebenslauf", // German
+  "Créer un CV professionnel en quelques secondes",     // French
+  "プロフェッショナルな履歴書を数秒で作成",                 // Japanese
+  "Crie um currículo profissional em segundos",         // Portuguese
+  "Создайте профессиональное резюме за секунды",        // Russian
+  "在几秒钟内制作一份专业的简历"                           // Chinese
+];
 import html2canvas from 'html2canvas';
+
+// Hooks
+import { useAnime, useStaggerAnime, stagger } from '@/hooks/useAnime';
 
 // Dynamic imports
 const ResumePreview = dynamic(() => import('@/components/ResumePreview'), {
@@ -15,6 +33,9 @@ const FormEditor = dynamic(() => import('@/components/FormEditor'), { ssr: false
 const ChatInterface = dynamic(() => import('@/components/ChatInterface'), { ssr: false });
 const CommentSidebar = dynamic(() => import('@/components/CommentSidebar'), { ssr: false });
 const LoadingOverlay = dynamic(() => import('@/components/LoadingOverlay'), { ssr: false });
+const DocsModal = dynamic(() => import('@/components/DocsModal'), { ssr: false });
+const BackgroundAnimation = dynamic(() => import('@/components/BackgroundAnimation'), { ssr: false });
+
 
 const LOADING_MESSAGES = [
   "Analyzing grid structure...",
@@ -32,17 +53,25 @@ const LOADING_MESSAGES = [
 export default function Home() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'idle' | 'discovering' | 'analyzing' | 'success' | 'error'>('idle');
+  const [discoveryFound, setDiscoveryFound] = useState(false); // New state for loader
+  const [loaderInitialRect, setLoaderInitialRect] = useState<{ top: number, left: number, width: number, height: number } | null>(null);
   const [step, setStep] = useState<'input' | 'selection' | 'editor'>('input');
+  const [prevStep, setPrevStep] = useState<string>('input');
   const [result, setResult] = useState<any>(null);
   const [templates, setTemplates] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const logsInterval = useRef<NodeJS.Timeout | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null); // Track session for chat history
 
   const [importing, setImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showPhotoDialog, setShowPhotoDialog] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
+
+  // Refs
+  // Refs
+  const inputRef = useRef<HTMLDivElement>(null); // For morphing animation
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resumePreviewRef = useRef<HTMLIFrameElement>(null); // Ref for screenshotting
 
@@ -65,7 +94,41 @@ export default function Home() {
   const [isCommentMode, setIsCommentMode] = useState(false);
   const [isCommentSidebarOpen, setIsCommentSidebarOpen] = useState(false);
 
-  // ... (existing saveToHistory)
+  // Input Step Animation
+  const { ref: inputContainerRef } = useAnime<HTMLDivElement>({
+    opacity: [0, 1],
+    translateY: [10, 0],
+    duration: 600,
+    easing: 'easeOutExpo',
+    delay: 100
+  }, [step === 'input']); // Trigger when entering input step
+
+  // Selection Template Animation
+  const templatesContainerRef = useStaggerAnime<HTMLDivElement>({
+    opacity: [0, 1],
+    translateY: [20, 0],
+    duration: 400,
+    easing: 'easeOutQuad',
+    delay: stagger(100)
+  }, [step === 'selection', templates]);
+
+
+  // Photo Dialog Animation
+  const [isPhotoDialogMounted, setIsPhotoDialogMounted] = useState(false);
+  useEffect(() => {
+    if (showPhotoDialog) setIsPhotoDialogMounted(true);
+  }, [showPhotoDialog]);
+
+  const { ref: photoDialogRef } = useAnime<HTMLDivElement>({
+    opacity: showPhotoDialog ? [0, 1] : [1, 0],
+    scale: showPhotoDialog ? [0.95, 1] : [1, 0.95],
+    duration: 200,
+    easing: 'easeOutQuad',
+    onComplete: () => {
+      if (!showPhotoDialog) setIsPhotoDialogMounted(false);
+    }
+  }, [showPhotoDialog]);
+
 
   const saveToHistory = (currentState: any) => {
     setHistory(prev => {
@@ -142,12 +205,18 @@ export default function Home() {
         body: JSON.stringify({
           resume_data: result.resume_data,
           user_request: prompt,
-          image_base64: screenshotBase64 // Send snapshot
+          image_base64: screenshotBase64, // Send snapshot
+          session_id: sessionId // Pass session ID for context
         })
       });
 
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+
+      // Update session_id if returned
+      if (data.session_id) {
+        setSessionId(data.session_id);
+      }
 
       if (data.resume_data) {
         // Deep compare check
@@ -188,7 +257,6 @@ export default function Home() {
     }
   };
 
-  // --- COMMENT HANDLERS ---
   // --- COMMENT HANDLERS ---
   const handleAddComment = (x: number, y: number, text: string, context: any) => {
     setComments(prev => {
@@ -288,7 +356,20 @@ export default function Home() {
 
   const handleDiscover = async () => {
     if (!query) return;
+
+    // Capture initial rect for morph animation
+    if (inputRef.current) {
+      const rect = inputRef.current.getBoundingClientRect();
+      setLoaderInitialRect({
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height
+      });
+    }
+
     setStatus('discovering');
+    setDiscoveryFound(false);
     setErrorMsg('');
 
     try {
@@ -303,12 +384,29 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
 
       setTemplates(data.templates || []);
-      setStep('selection');
-      setStatus('idle');
+      // Don't switch step yet, signal the loader that data is ready
+      setDiscoveryFound(true);
+
     } catch (e: any) {
       setErrorMsg(e.message || 'Discovery failed');
       setStatus('error');
     }
+  };
+
+  const handleBuildTransitionComplete = () => {
+    setStep('editor');
+    setStatus('idle');
+  };
+
+  const handleDiscoveryComplete = () => {
+    if (status === 'error') {
+      setStatus('idle');
+      // Stay on 'input' step to allow retrying
+    } else {
+      setStep('selection');
+      setStatus('idle');
+    }
+    setDiscoveryFound(false);
   };
 
   const handleSelectTemplate = async (templateId: string) => {
@@ -326,12 +424,18 @@ export default function Home() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      addLog("Build successful. Starting editor...");
-      await new Promise(r => setTimeout(r, 800));
+      addLog("Build successful. Finalizing...");
+
+      // Extract and store session_id
+      if (data._meta?.session_id) {
+        setSessionId(data._meta.session_id);
+      }
 
       setResult(data);
-      setStep('editor');
-      setStatus('success');
+      // Wait a moment before triggering exit animation
+      await new Promise(r => setTimeout(r, 600));
+
+      setStatus('success'); // Triggers CinematicBuildLoader exit animation
 
       // Check if photo is needed
       checkForMissingPhoto(data);
@@ -363,38 +467,111 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
-    setImporting(true);
+    // If we're already in the editor step, this is an import into existing CV
+    if (step === 'editor' && result) {
+      // Use the existing import flow
+      const formData = new FormData();
+      formData.append('file', file);
+      setImporting(true);
+
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_URL}/import-cv`, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data.error) {
+          setErrorMsg(data.error);
+          setImporting(false);
+          return;
+        }
+
+        if (data.resume_data && result) {
+          const newData = {
+            ...result,
+            resume_data: { ...result.resume_data, ...data.resume_data }
+          };
+          setResult(newData);
+          setErrorMsg('');
+
+          // Verify photo again after import
+          checkForMissingPhoto(newData);
+        }
+      } catch (err: any) {
+        setErrorMsg("Import failed: " + err.message);
+      } finally {
+        setImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+      return;
+    }
+
+    // Otherwise, we're building a NEW CV from uploaded CV/resume
+    // Show loading screen
+    setStatus('analyzing');
+    startLogStream();
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${API_URL}/import-cv`, {
+
+      // Step 1: Extract text from uploaded CV
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const importRes = await fetch(`${API_URL}/import-cv`, {
         method: 'POST',
         body: formData
       });
-      const data = await res.json();
-      if (data.error) {
-        setErrorMsg(data.error);
-        setImporting(false);
-        return;
+      const importData = await importRes.json();
+
+      if (importData.error) {
+        throw new Error(importData.error);
       }
 
-      if (data.resume_data && result) {
-        const newData = {
-          ...result,
-          resume_data: { ...result.resume_data, ...data.resume_data }
+      addLog("CV content extracted successfully");
+
+      // Step 2: Use the upload-generate endpoint with the CV as a "custom template"
+      // This will build the form structure based on an uploaded file
+      const uploadFormData = new FormData();
+      uploadFormData.append('file', file);
+      uploadFormData.append('query', 'Resume');
+
+      const genRes = await fetch(`${API_URL}/generate-upload`, {
+        method: 'POST',
+        body: uploadFormData
+      });
+
+      const genData = await genRes.json();
+      if (genData.error) throw new Error(genData.error);
+
+      addLog("Form structure generated from CV");
+
+      // Step 3: Merge the extracted data with the generated structure
+      if (genData && importData.resume_data) {
+        genData.resume_data = {
+          ...genData.resume_data,
+          ...importData.resume_data
         };
-        setResult(newData);
-        setErrorMsg('');
-
-        // Verify photo again after import
-        checkForMissingPhoto(newData);
       }
+
+      // Extract and store session_id
+      if (genData._meta?.session_id) {
+        setSessionId(genData._meta.session_id);
+      }
+
+      setResult(genData);
+      await new Promise(r => setTimeout(r, 600));
+
+      setStatus('success');
+      checkForMissingPhoto(genData);
+
     } catch (err: any) {
-      setErrorMsg("Import failed: " + err.message);
+      setErrorMsg("CV upload failed: " + err.message);
+      setStatus('error');
+      addLog(`Error: ${err.message}`);
     } finally {
-      setImporting(false);
+      stopLogStream();
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -454,6 +631,54 @@ export default function Home() {
     input.click();
   };
 
+  const templateUploadRef = useRef<HTMLInputElement>(null);
+
+  const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset UI
+    setStatus('analyzing');
+    startLogStream();
+
+    // Create FormData
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('query', query || 'Custom Template');
+
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${API_URL}/generate-upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      addLog("Template analysis successful. Finalizing...");
+
+      // Extract and store session_id
+      if (data._meta?.session_id) {
+        setSessionId(data._meta.session_id);
+      }
+
+      setResult(data);
+      await new Promise(r => setTimeout(r, 600));
+
+      setStatus('success');
+      checkForMissingPhoto(data);
+
+    } catch (e: any) {
+      setErrorMsg(e.message || 'Template upload failed');
+      setStatus('error');
+      addLog(`Error: ${e.message}`);
+    } finally {
+      stopLogStream();
+      if (templateUploadRef.current) templateUploadRef.current.value = '';
+    }
+  };
+
   useEffect(() => {
     return () => stopLogStream();
   }, []);
@@ -479,6 +704,36 @@ export default function Home() {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [result]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape to close modals
+      if (e.key === 'Escape') {
+        if (showDocs) setShowDocs(false);
+        if (showPhotoDialog) setShowPhotoDialog(false);
+      }
+
+      // Undo/Redo
+      // Check for Ctrl (Windows/Linux) or Meta (Mac)
+      if ((e.ctrlKey || e.metaKey) && !isAgentWorking) {
+        if (e.key === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            handleRedo();
+          } else {
+            handleUndo();
+          }
+        } else if (e.key === 'y') {
+          e.preventDefault();
+          handleRedo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showDocs, showPhotoDialog, isAgentWorking, history, future, result]);
 
   const performExport = async () => {
     try {
@@ -566,46 +821,95 @@ export default function Home() {
 
       <div className="flex-1 flex flex-col relative overflow-hidden">
 
+        {/* FULLSCREEN LOADER */}
+        {(status === 'discovering' || (status === 'error' && step === 'input' && errorMsg)) && (
+          <FullscreenConsoleLoader
+            isReady={discoveryFound}
+            onComplete={handleDiscoveryComplete}
+            error={status === 'error' ? errorMsg : undefined}
+            initialRect={loaderInitialRect}
+          />
+        )}
+
         {/* INPUT STEP */}
         {step === 'input' && (
-          <div className="flex flex-col items-center justify-center flex-1 w-full px-4">
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-3xl">
+          <div className="flex flex-col items-center justify-center flex-1 w-full px-4 relative">
+            <BackgroundAnimation />
+            <div ref={inputContainerRef} className="w-full max-w-3xl z-10 relative">
               <h1 className="text-5xl font-black mb-6 tracking-tighter font-mono uppercase text-center leading-none">
-                Build_Identity<span className="text-[var(--accent-primary)] animate-pulse">.exe</span>
+                Agentic_CV<span className="text-[var(--accent-primary)] animate-pulse">_Generator</span>
               </h1>
-              <div className="flex items-center gap-4 mb-12 border-l-2 border-[var(--accent-primary)] pl-6 py-2 ml-4">
-                <p className="text-[var(--text-muted)] text-lg font-mono">
-                  &gt; AI-driven resume generation for modern infrastructure.
-                </p>
+
+              <div className="flex justify-center mb-12">
+                <div className="flex items-center gap-4 border border-[var(--border-dim)] bg-black/80 backdrop-blur-sm px-6 py-3 min-w-[320px] justify-center">
+                  <div className="w-2 h-2 bg-[var(--accent-primary)] animate-pulse" />
+                  <p className="text-[var(--text-muted)] text-sm font-mono tracking-wide uppercase min-h-[20px]">
+                    <TypewriterText
+                      texts={SUBTITLE_VARIANTS}
+                      pauseDuration={20000}
+                      typoProbability={0.1}
+                    />
+                  </p>
+                </div>
               </div>
 
               <div className="relative group">
-                {/* Outline removed */}
-                <div className="relative bg-[var(--bg-root)] border-2 border-[var(--text-main)] p-0 flex items-center transition-all duration-200 shadow-none hover:shadow-[8px_8px_0px_0px_var(--accent-primary)] hover:-translate-y-1 focus-within:shadow-[8px_8px_0px_0px_var(--accent-primary)] focus-within:-translate-y-1">
-                  <div className="w-12 h-14 bg-[var(--text-main)] flex items-center justify-center text-[var(--bg-root)]">
-                    <Command size={20} />
+                <div ref={inputRef} className="relative bg-black/80 backdrop-blur-md border border-[var(--text-main)] p-0 flex items-center transition-all duration-200 shadow-none hover:shadow-[8px_8px_0px_0px_var(--accent-primary)] hover:-translate-y-1 hover:-translate-x-1 focus-within:shadow-[8px_8px_0px_0px_var(--accent-primary)] focus-within:-translate-y-1 focus-within:-translate-x-1">
+                  <div className="w-16 h-16 flex items-center justify-center text-[var(--accent-primary)] border-r border-[var(--text-main)] font-mono text-2xl font-bold select-none">
+                    &gt;
                   </div>
                   <input
-                    className="bg-transparent border-none outline-none flex-1 text-[var(--text-main)] placeholder-[var(--text-muted)] font-mono text-base h-14 px-4 uppercase"
-                    placeholder="> ENTER_ROLE (e.g. DEVOPS ENGINEER)..."
+                    className="bg-transparent border-none outline-none flex-1 text-[var(--accent-primary)] placeholder-[var(--text-dim)] font-mono text-lg h-16 px-6 uppercase tracking-wider"
+                    placeholder="ENTER_ROLE (e.g. DEVOPS ENGINEER)..."
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleDiscover()}
                     autoFocus
                   />
-                  <button onClick={handleDiscover} disabled={!query || status === 'discovering'} className="h-14 px-8 bg-[var(--bg-root)] text-[var(--text-main)] font-bold text-sm border-l-2 border-[var(--text-main)] hover:bg-[var(--text-main)] hover:text-[var(--bg-root)] transition-all disabled:opacity-50 uppercase flex items-center gap-2">
-                    {status === 'discovering' ? <Loader2 className="animate-spin" size={18} /> : <span>Execute_</span>}
+                  <button
+                    onClick={handleDiscover}
+                    disabled={!query.trim() || status !== 'idle'}
+                    className="h-16 px-8 font-mono font-bold text-[var(--text-main)] hover:bg-[var(--accent-primary)] hover:text-[var(--bg-root)] transition-all uppercase tracking-widest text-sm flex items-center gap-2 border-l border-[var(--text-main)] disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-[var(--text-main)]"
+                  >
+                    {status === 'discovering' ? <Loader2 className="animate-spin" /> : <span>[ EXECUTE ]</span>}
                   </button>
                 </div>
               </div>
 
-              {status === 'discovering' && (
-                <div className="mt-8 font-mono text-sm text-[var(--text-muted)] flex items-center justify-center gap-3">
-                  <div className="w-3 h-3 bg-[var(--accent-primary)] animate-spin" />
-                  <span className="uppercase tracking-widest">&gt; AGENTS_DISPATCHED...</span>
-                </div>
-              )}
-            </motion.div>
+              {/* Upload CV Button - accepts any file type */}
+              <div className="flex justify-center mt-6">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.txt,.md,image/*"
+                />
+                <button
+                  onClick={handleImportClick}
+                  disabled={status !== 'idle'}
+                  className="text-[var(--text-main)] hover:text-[var(--accent-primary)] text-xs font-mono uppercase tracking-widest border-2 border-[var(--text-main)] hover:border-[var(--accent-primary)] transition-all duration-200 flex items-center gap-2 px-6 py-3 bg-[var(--bg-root)] hover:bg-[var(--bg-surface)] disabled:opacity-50 hover:shadow-[4px_4px_0px_0px_var(--accent-primary)] hover:-translate-x-[2px] hover:-translate-y-[2px] active:shadow-none active:translate-x-0 active:translate-y-0"
+                >
+                  <Upload size={16} className="stroke-[2.5]" />
+                  UPLOAD_YOUR_CV
+                </button>
+              </div>
+
+            </div>
+            {status === 'discovering' && (
+              <div className="mt-8 font-mono text-sm text-[var(--text-muted)] flex items-center justify-center gap-3">
+                <div className="w-3 h-3 bg-[var(--accent-primary)] animate-spin" />
+                <span className="uppercase tracking-widest">&gt; AGENTS_DISPATCHED...</span>
+              </div>
+            )}
+            {/* Cinematic Build Loader for CV uploads */}
+            {(status === 'analyzing' || status === 'success') && step === 'input' && (
+              <CinematicBuildLoader
+                status={status}
+                logs={logs}
+                onComplete={handleBuildTransitionComplete}
+              />
+            )}
           </div>
         )}
 
@@ -619,9 +923,9 @@ export default function Home() {
               </div>
               <button onClick={() => setStep('input')} className="text-[var(--text-muted)] hover:text-[var(--text-main)] text-sm font-bold font-mono border-2 border-transparent hover:border-[var(--text-main)] px-4 py-2 uppercase transition-all">&lt; Return_to_Search</button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div ref={templatesContainerRef} className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {templates.map((t, i) => (
-                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} onClick={() => handleSelectTemplate(t.id)} className="group cursor-pointer border-2 border-[var(--border-dim)] hover:border-[var(--text-main)] bg-[var(--bg-card)] hover:shadow-[8px_8px_0px_0px_var(--accent-primary)] hover:-translate-y-1 transition-all duration-200">
+                <div key={i} onClick={() => handleSelectTemplate(t.id)} className="group cursor-pointer border-2 border-[var(--border-dim)] hover:border-[var(--text-main)] bg-[var(--bg-card)] hover:shadow-[8px_8px_0px_0px_var(--accent-primary)] hover:-translate-y-1 transition-all duration-200 opacity-0 transform translate-y-4">
                   <div className="aspect-[3/4] bg-[var(--bg-root)] relative border-b-2 border-[var(--border-dim)]">
                     <img src={t.url} className="w-full h-full object-cover object-top opacity-80 group-hover:opacity-100 transition-all duration-500" alt="preview" />
                     <div className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-[1px]">
@@ -632,31 +936,16 @@ export default function Home() {
                     <h3 className="font-bold text-sm mb-1 font-mono uppercase tracking-tight truncate">{t.title}</h3>
                     <p className="text-xs text-[var(--text-muted)] font-mono line-clamp-2">{t.description}</p>
                   </div>
-                </motion.div>
+                </div>
               ))}
             </div>
-            {/* Deploy Logs */}
-            {status === 'analyzing' && (
-              <div className="fixed inset-0 bg-black/95 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="w-full max-w-xl bg-black border-2 border-[var(--text-main)] shadow-[8px_8px_0px_0px_var(--accent-primary)] overflow-hidden font-mono text-xs">
-                  <div className="bg-[var(--text-main)] px-4 py-3 flex items-center justify-between text-[var(--bg-root)] border-b border-[var(--text-main)]">
-                    <div className="flex items-center gap-2">
-                      <span className="animate-spin text-[var(--bg-root)]">✜</span>
-                      <span className="font-bold uppercase tracking-widest">System_Build.log</span>
-                    </div>
-                    <span className="animate-pulse font-bold">RUNNING</span>
-                  </div>
-                  <div className="p-6 h-80 overflow-y-auto bg-black custom-scrollbar flex flex-col justify-end border-t-2 border-[var(--text-main)]">
-                    {logs.map((log, i) => (
-                      <div key={i} className="mb-1 break-all flex gap-3">
-                        <span className="text-[var(--text-muted)] opacity-50 select-none min-w-[80px] text-right">{log.split(']')[0]}]</span>
-                        <span className={log.includes("Error") ? "text-[var(--accent-error)]" : "text-[var(--text-main)]"}>{log.split(']')[1] || log}</span>
-                      </div>
-                    ))}
-                    <div className="animate-pulse text-[var(--accent-primary)] mt-2">_</div>
-                  </div>
-                </div>
-              </div>
+            {/* Deploy Logs / Cinematic Build Loader */}
+            {(status === 'analyzing' || status === 'success') && (
+              <CinematicBuildLoader
+                status={status}
+                logs={logs}
+                onComplete={handleBuildTransitionComplete}
+              />
             )}
           </div>
         )}
@@ -667,8 +956,6 @@ export default function Home() {
             {/* Left: Input */}
             <div className="w-[450px] flex flex-col border-r border-[var(--border-dim)] bg-[var(--bg-surface)] relative">
 
-              {/* Editor Toolbar with Undo/Redo */}
-              {/* Editor Toolbar with Undo/Redo */}
               {/* Editor Toolbar with Undo/Redo */}
               <div className="h-12 border-b-2 border-[var(--border-dim)] flex items-center px-4 justify-between bg-[var(--bg-root)] z-10 shrink-0">
                 <div className="flex items-center gap-4">
@@ -729,28 +1016,9 @@ export default function Home() {
 
             {/* Right: Preview */}
             <div className="flex-1 bg-[var(--bg-root)] flex flex-col relative">
-              {/* Removed Export Button from here */}
 
               {/* Toolbar for Comments */}
               <div className="h-10 bg-[var(--bg-surface)] border-b border-[var(--border-dim)] flex items-center px-4 gap-4 justify-end">
-                {/* 
-                // COMMENTS DISABLED FOR BETA V0.9 REFACTOR
-                <button
-                  onClick={() => { setIsCommentMode(!isCommentMode); setIsCommentSidebarOpen(!isCommentMode); }}
-                  className={`flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded transition-colors ${isCommentMode ? 'bg-[var(--accent-primary)] text-[var(--bg-root)] font-bold' : 'text-[var(--text-muted)] hover:bg-[var(--bg-dim)]'}`}
-                >
-                  <MessageSquare size={12} />
-                  {isCommentMode ? 'COMMENT MODE ON' : 'ADD COMMENTS'}
-                </button>
-                {comments.some(c => !c.resolved) && (
-                  <button
-                    onClick={handleFixComments}
-                    className="flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded bg-[var(--text-main)] text-[var(--bg-root)] hover:opacity-90 font-bold animate-pulse shadow-[2px_2px_0px_0px_var(--accent-primary)]"
-                  >
-                    <Sparkles size={12} /> FIX ALL ({comments.filter(c => !c.resolved).length})
-                  </button>
-                )}
-                */}
               </div>
 
               <div className="flex-1 overflow-hidden p-8 bg-[var(--bg-dim)] flex items-center justify-center relative">
@@ -792,230 +1060,70 @@ export default function Home() {
         )}
 
         {/* Photo Logic Dialog */}
-        <AnimatePresence>
-          {showPhotoDialog && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center">
-              <div className="w-full max-w-md bg-[var(--bg-surface)] border border-[var(--border-dim)] rounded-lg p-6 shadow-2xl">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2"><ImageIcon size={18} /> Profile Photo Missing</h3>
-                </div>
-                <p className="text-sm text-[var(--text-muted)] mb-6">
-                  This template uses a profile picture, but your data doesn't have one. Would you like to upload one or let us find it from your social profiles?
-                </p>
-                <div className="flex flex-col gap-3">
-                  <button onClick={handleAutoFetchPhoto} className="w-full py-2 btn-tech-primary flex items-center justify-center gap-2">
-                    <Github size={16} /> Auto-fetch from GitHub
-                  </button>
-                  <button onClick={handlePhotoUpload} className="w-full py-2 border border-[var(--border-dim)] text-[var(--text-main)] hover:bg-[var(--bg-root)] flex items-center justify-center gap-2 font-mono text-sm">
-                    <Upload size={16} /> Upload Image
-                  </button>
-                  <button onClick={() => setShowPhotoDialog(false)} className="w-full py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-dim)]">
-                    Skip for now
-                  </button>
-                </div>
+        {(showPhotoDialog || isPhotoDialogMounted) && (
+          <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center transition-opacity" style={{ opacity: showPhotoDialog ? 1 : 0, display: isPhotoDialogMounted ? 'flex' : 'none' }}>
+            <div
+              ref={photoDialogRef}
+              className="w-full max-w-md bg-[var(--bg-surface)] border border-[var(--border-dim)] rounded-lg p-6 shadow-2xl origin-center"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-lg flex items-center gap-2"><ImageIcon size={18} /> Profile Photo Missing</h3>
+                <button onClick={() => setShowPhotoDialog(false)}>
+                  <XCircle size={20} className="text-[var(--text-muted)] hover:text-[var(--accent-error)]" />
+                </button>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <p className="text-sm text-[var(--text-muted)] mb-6">
+                This template looks best with a profile picture, but your CV does not have one. Would you like to upload one, or have our agent fetch one from your GitHub?
+              </p>
 
-        <AnimatePresence>
-          {errorMsg && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="fixed bottom-6 right-6 px-4 py-3 bg-[var(--bg-surface)] border border-[var(--accent-error)] text-[var(--accent-error)] rounded shadow-lg text-sm font-mono flex items-center gap-3">
-              <span>Error: {errorMsg}</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Docs Modal */}
-      <AnimatePresence>
-        {showDocs && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-8" onClick={() => setShowDocs(false)}>
-            <div className="w-full max-w-4xl h-full max-h-[85vh] bg-[var(--bg-surface)] border border-[var(--border-dim)] rounded-lg shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between p-5 border-b border-[var(--border-dim)] bg-[var(--bg-root)]">
-                <div className="flex items-center gap-3">
-                  <div className="w-1 h-6 bg-[var(--accent-primary)] rounded-full"></div>
-                  <h3 className="font-bold text-lg font-mono tracking-tight">DOCUMENTATION</h3>
-                </div>
-                <button onClick={() => setShowDocs(false)} className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"><Trash2 className="rotate-45" size={24} /></button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-
-                {/* Hero Section */}
-                <div className="mb-12 border-b border-[var(--border-dim)] pb-8">
-                  <h1 className="text-3xl font-bold mb-3 bg-gradient-to-r from-[var(--text-main)] to-[var(--text-muted)] bg-clip-text text-transparent">AI-Native Resume Engineering</h1>
-                  <p className="text-[var(--text-muted)] text-lg leading-relaxed max-w-2xl">
-                    An autonomous design engine that discovers, analyzes, and reverse-engineers professional resumes from the open web into type-safe React forms.
-                  </p>
-                </div>
-
-                {/* Architecture Grid */}
-                <div className="mb-12">
-                  <h3 className="flex items-center gap-2 font-mono text-sm text-[var(--accent-primary)] mb-6 uppercase tracking-wider">
-                    <span className="w-2 h-2 rounded-full bg-[var(--accent-primary)]"></span> System Architecture
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-5 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-md hover:border-[var(--accent-primary)] transition-colors group">
-                      <div className="flex items-center gap-2 mb-3 text-[var(--accent-primary)]">
-                        <Layout size={18} />
-                        <h4 className="font-mono font-bold text-xs">PHASE 1: DISCOVERY</h4>
-                      </div>
-                      <p className="text-xs text-[var(--text-muted)] leading-5">
-                        Autonomous browser agents query search engines and portfolio sites to find top-ranking designs for your specific role.
-                      </p>
-                    </div>
-                    <div className="p-5 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-md hover:border-[var(--accent-primary)] transition-colors group">
-                      <div className="flex items-center gap-2 mb-3 text-[var(--accent-secondary)]">
-                        <ImageIcon size={18} />
-                        <h4 className="font-mono font-bold text-xs">PHASE 2: VISION</h4>
-                      </div>
-                      <p className="text-xs text-[var(--text-muted)] leading-5">
-                        Gemini 3 Flash Preview performs pixel-level analysis to extract layout hierarchy, typography tokens, and component structures.
-                      </p>
-                    </div>
-                    <div className="p-5 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-md hover:border-[var(--accent-primary)] transition-colors group">
-                      <div className="flex items-center gap-2 mb-3 text-[var(--text-main)]">
-                        <Terminal size={18} />
-                        <h4 className="font-mono font-bold text-xs">PHASE 3: HYDRATION</h4>
-                      </div>
-                      <p className="text-xs text-[var(--text-muted)] leading-5">
-                        The Schema Engine converts visual data into a validation-ready JSON schema, building the UI on the fly.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                  {/* Workflow Column */}
-                  <section>
-                    <h3 className="flex items-center gap-2 font-mono text-sm text-[var(--text-muted)] mb-6 uppercase tracking-wider">
-                      <span className="w-2 h-2 rounded-full bg-[var(--text-main)]"></span> Workflow
-                    </h3>
-                    <div className="space-y-3">
-                      {[
-                        "Enter target role (e.g. 'Senior DevOps')",
-                        "Select a high-quality template",
-                        "Edit Personal Details & Experience",
-                        "Export as production-ready PDF"
-                      ].map((step, i) => (
-                        <div key={i} className="flex items-center gap-4 p-3 bg-[var(--border-dim)]/30 rounded border border-transparent hover:border-[var(--border-dim)] transition-colors">
-                          <span className="font-mono text-xs text-[var(--text-muted)] w-6 text-right">0{i + 1}</span>
-                          <span className="text-sm text-[var(--text-main)]">{step}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  {/* Security & Tips Column */}
-                  <section className="space-y-8">
-                    <div>
-                      <h3 className="flex items-center gap-2 font-mono text-sm text-[var(--text-muted)] mb-6 uppercase tracking-wider">
-                        <span className="w-2 h-2 rounded-full bg-[var(--accent-error)]"></span> Security Protocols
-                      </h3>
-                      <div className="p-4 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-md">
-                        <div className="flex items-center gap-2 mb-2 text-[var(--text-main)]">
-                          <CheckCircle2 size={16} className="text-[var(--accent-primary)]" />
-                          <span className="text-sm font-bold">Zero-Persistence Data</span>
-                        </div>
-                        <p className="text-xs text-[var(--text-muted)] mb-4 pl-6">
-                          Your personal data exists <strong>only</strong> in your browser's memory. We do not store, log, or persist your CV content on any server.
-                        </p>
-                        <div className="flex items-center gap-2 mb-2 text-[var(--text-main)]">
-                          <CheckCircle2 size={16} className="text-[var(--accent-primary)]" />
-                          <span className="text-sm font-bold">Client-Side Export</span>
-                        </div>
-                        <p className="text-xs text-[var(--text-muted)] pl-6">
-                          PDF generation happens instantly via standard browser print APIs, ensuring your document never leaves your control.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div>
-                      <h3 className="flex items-center gap-2 font-mono text-sm text-[var(--text-muted)] mb-4 uppercase tracking-wider">
-                        <span className="w-2 h-2 rounded-full bg-[var(--accent-secondary)]"></span> Pro Tips
-                      </h3>
-                      <div className="grid grid-cols-1 gap-3">
-                        <div className="p-3 border border-dashed border-[var(--border-mid)] rounded bg-[var(--bg-root)]/50">
-                          <h4 className="font-bold text-xs mb-1 text-[var(--text-main)]">⚡ Instant Import</h4>
-                          <p className="text-[10px] text-[var(--text-muted)]">Don't start from scratch. Use the <strong>Import CV</strong> button to auto-fill this template with data from your existing PDF.</p>
-                        </div>
-                        <div className="p-3 border border-dashed border-[var(--border-mid)] rounded bg-[var(--bg-root)]/50">
-                          <h4 className="font-bold text-xs mb-1 text-[var(--text-main)]">🎯 Search Specifics</h4>
-                          <p className="text-[10px] text-[var(--text-muted)]">For better design matches, search for specific roles (e.g. "Senior React Developer") rather than generic terms.</p>
-                        </div>
-                        <div className="p-3 border border-dashed border-[var(--border-mid)] rounded bg-[var(--bg-root)]/50">
-                          <h4 className="font-bold text-xs mb-1 text-[var(--text-main)]">📸 Auto-Photos</h4>
-                          <p className="text-[10px] text-[var(--text-muted)]">Add a <strong>GitHub</strong> link to your profiles section, and we'll automatically fetch your high-res avatar.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </section>
-                </div>
-
+              <div className="space-y-3">
+                <button
+                  onClick={handleAutoFetchPhoto}
+                  className="w-full flex items-center justify-center gap-3 py-3 border border-[var(--border-dim)] hover:border-[var(--text-main)] hover:bg-[var(--bg-root)] transition-all font-mono text-sm"
+                >
+                  <Github size={16} />
+                  Auto-Fetch from GitHub
+                </button>
+                <button
+                  onClick={handlePhotoUpload}
+                  className="w-full flex items-center justify-center gap-3 py-3 bg-[var(--text-main)] text-[var(--bg-root)] font-bold hover:opacity-90 transition-all font-mono text-sm"
+                >
+                  <Upload size={16} />
+                  Upload from Device
+                </button>
+                <button
+                  onClick={() => setShowPhotoDialog(false)}
+                  className="w-full text-center text-xs text-[var(--text-muted)] hover:underline mt-2"
+                >
+                  Skip (I will add it later)
+                </button>
               </div>
             </div>
-          </motion.div>
-        )}
-
-      </AnimatePresence>
-
-      {/* Export Loading Overlay - System_Build.log Style */}
-      <AnimatePresence>
-        {isExporting && (
-          <div className="fixed inset-0 bg-black/95 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-xl bg-black border-2 border-[var(--text-main)] shadow-[8px_8px_0px_0px_var(--accent-primary)] overflow-hidden font-mono text-xs"
-            >
-              <div className="bg-[var(--text-main)] px-4 py-3 flex items-center justify-between text-[var(--bg-root)] border-b border-[var(--text-main)]">
-                <div className="flex items-center gap-2">
-                  <span className="animate-spin text-[var(--bg-root)]">✜</span>
-                  <span className="font-bold uppercase tracking-widest">PDF_Export.log</span>
-                </div>
-                <span className="animate-pulse font-bold">RUNNING</span>
-              </div>
-              <div className="p-6 h-48 overflow-y-auto bg-black custom-scrollbar flex flex-col justify-end border-t-2 border-[var(--text-main)]">
-                <div className="mb-1 break-all flex gap-3">
-                  <span className="text-[var(--text-muted)] opacity-50 select-none min-w-[80px] text-right">[00:00:01]</span>
-                  <span className="text-[var(--text-main)]">Initializing Chromium renderer...</span>
-                </div>
-                <div className="mb-1 break-all flex gap-3">
-                  <span className="text-[var(--text-muted)] opacity-50 select-none min-w-[80px] text-right">[00:00:02]</span>
-                  <span className="text-[var(--text-main)]">Injecting page content...</span>
-                </div>
-                <div className="mb-1 break-all flex gap-3">
-                  <span className="text-[var(--text-muted)] opacity-50 select-none min-w-[80px] text-right">[00:00:03]</span>
-                  <span className="text-[var(--accent-primary)]">Generating PDF assets...</span>
-                </div>
-                <div className="animate-pulse text-[var(--accent-primary)] mt-2">_</div>
-              </div>
-            </motion.div>
           </div>
         )}
-      </AnimatePresence>
 
-      {/* Global Toast Notification */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, x: '-50%' }}
-            exit={{ opacity: 0, y: 20, x: '-50%' }}
-            className={`fixed bottom-8 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-md border shadow-2xl z-[100] flex items-center gap-3 font-mono text-sm max-w-md
-                ${toast?.type === 'error' ? 'bg-[#290000] border-[var(--accent-error)] text-[var(--accent-error)]' :
-                toast?.type === 'success' ? 'bg-[#001a00] border-[var(--accent-primary)] text-[var(--accent-primary)]' :
-                  'bg-[var(--bg-surface)] border-[var(--border-dim)] text-[var(--text-main)]'}`}
-          >
-            {toast?.type === 'error' ? <XCircle size={18} /> :
-              toast?.type === 'success' ? <CheckCircle2 size={18} /> :
-                <Sparkles size={18} />}
-            <span>{toast?.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      </div>
+
+      <DocsModal
+        isOpen={showDocs}
+        onClose={() => setShowDocs(false)}
+      />
+
+      {/* Toast */}
+
+      {
+        toast && (
+          <div className={`fixed top-4 right-4 z-[100] border-2 px-4 py-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] animate-in slide-in-from-right-full fade-in duration-300 font-mono text-sm font-bold flex items-center gap-2 ${toast.type === 'success' ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)] text-black' :
+            toast.type === 'error' ? 'bg-[var(--accent-error)] border-[var(--accent-error)] text-white' :
+              'bg-[var(--bg-surface)] border-[var(--text-main)] text-[var(--text-main)]'
+            }`}>
+            {toast.type === 'success' && <CheckCircle2 size={16} />}
+            {toast.type === 'error' && <XCircle size={16} />}
+            {toast.message}
+          </div>
+        )
+      }
+
     </main >
   );
 }

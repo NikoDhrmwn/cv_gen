@@ -1,11 +1,33 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence, Reorder } from 'framer-motion';
-import { Trash2, GripVertical, AlertTriangle, Plus, Columns, Sidebar, Sparkles, LayoutTemplate, ChevronDown, ChevronRight, Settings2, ArrowUp, ArrowDown, Maximize2 } from 'lucide-react';
-import DynamicRenderer, { renderDynamicField } from './DynamicRenderer';
-import { parseTemplateSections, reorderSections, swapSections, TemplateSection } from '../utils/templateParser';
+import React, { useState, useEffect, useRef } from 'react';
+import { Trash2, GripVertical, AlertTriangle, Plus, Columns, Sidebar, Sparkles, ChevronDown, ChevronRight, Maximize2 } from 'lucide-react';
+import DynamicRenderer from './DynamicRenderer';
+import { parseTemplateSections, swapSections, TemplateSection } from '../utils/templateParser';
 import RichTextModal from './RichTextModal';
 import LoadingOverlay from './LoadingOverlay';
 import ConfirmationModal from './ConfirmationModal';
+import { AnimatedButton } from './ui/AnimatedButton';
+import { useAnime } from '../hooks/useAnime';
+
+// DnD Kit
+import {
+    DndContext,
+    closestCenter,
+    KeyboardSensor,
+    PointerSensor,
+    useSensor,
+    useSensors,
+    DragOverlay,
+    defaultDropAnimationSideEffects,
+    DragEndEvent
+} from '@dnd-kit/core';
+import {
+    arrayMove,
+    SortableContext,
+    sortableKeyboardCoordinates,
+    verticalListSortingStrategy,
+    useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 interface FormEditorProps {
     data: any;
@@ -28,6 +50,14 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['basics']));
     const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'custom_section' | 'item' | 'template_section', index: number, sectionIndex?: number, title?: string, section?: TemplateSection } | null>(null);
     const [isReordering, setIsReordering] = useState(false);
+
+    // Tab Animation Hook
+    const { ref: tabLineRef, restart: restartTabLine } = useAnime<HTMLDivElement>({
+        width: ['0%', '100%'],
+        opacity: [0, 1],
+        duration: 300,
+        easing: 'easeOutExpo'
+    }, [activeTab]);
 
     const handleConfirmDelete = () => {
         if (!deleteConfirm) return;
@@ -54,19 +84,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
 
     const resumeData = data.resume_data;
     const formSchema = data.form_schema || {};
-
-    // Layout Management - Swap two adjacent sections in the template
-    const handleMoveSection = (index: number, direction: 'up' | 'down') => {
-        const sections = parseTemplateSections(data.html_template);
-        if (!sections || sections.length < 2) return;
-
-        const targetIndex = direction === 'up' ? index - 1 : index + 1;
-        if (targetIndex < 0 || targetIndex >= sections.length) return;
-
-        // Use swapSections (which internally uses reorderSections) to swap the two template blocks
-        const newHtml = swapSections(data.html_template, sections[index], sections[targetIndex]);
-        onChange({ ...data, html_template: newHtml });
-    };
 
     const toggleSection = (id: string) => {
         const newSet = new Set(expandedSections);
@@ -119,7 +136,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
     const addCustomSection = () => {
         if (!newSectionTitle.trim()) return;
         const sectionKey = `custom_${Date.now()} `;
-        // Ensure we don't accidentally create an "undefined" type if state is weird, default to text-list
         const typeToUse = newSectionType || 'text-list';
 
         const newSection = {
@@ -184,15 +200,13 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
 
     const schemaSections = formSchema.sections || [];
 
-    // Normalize unknown field types to closest known type
     const normalizeFieldType = (type: string): string => {
         const knownTypes = ['text', 'email', 'tel', 'textarea', 'image', 'url', 'date',
             'slider', 'dots', 'stars', 'rating', 'percentage', 'select'];
         if (knownTypes.includes(type)) return type;
 
-        // Map unknown types to closest known type
         if (type?.includes('bar') || type?.includes('progress') || type?.includes('gauge') || type?.includes('circle')) {
-            return 'slider';  // Progress-like elements become sliders
+            return 'slider';
         }
         if (type?.includes('dot') || type?.includes('circle') || type?.includes('bullet')) {
             return 'dots';
@@ -206,7 +220,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
         if (type?.includes('level') || type?.includes('percent') || type?.includes('score')) {
             return 'slider';
         }
-        // Default fallback to text for completely unknown types
         return 'text';
     };
 
@@ -231,7 +244,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
         const isCompact = ['skill-bars', 'skill-dots', 'skill-stars', 'tags'].includes(sectionSchema.type);
         const isExpanded = expandedSections.has(sectionId);
 
-        // Find the level field schema for compact sections
         const levelField = (sectionSchema.item_schema || []).find((f: any) =>
             ['slider', 'dots', 'stars', 'percentage', 'rating'].includes(f.type)
         );
@@ -248,7 +260,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
                 {isCompact ? (
                     <div className="space-y-2">
                         {items.map((item: any, index: number) => {
-                            // Determine field names dynamically
                             const textField = (sectionSchema.item_schema || []).find((f: any) =>
                                 !['slider', 'dots', 'stars', 'percentage', 'rating', 'image'].includes(f.type)
                             ) || { name: 'name' };
@@ -264,7 +275,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
                                         onChange={(e) => updateArrayItem(sectionId, index, textKey, e.target.value)}
                                         placeholder={textField.label || "Name"}
                                     />
-                                    {/* If level field has custom render, use DynamicRenderer */}
                                     {levelField?.render ? (
                                         <DynamicRenderer
                                             config={levelField.render}
@@ -324,7 +334,6 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
                                 </div>
                                 <div className="space-y-3">
                                     {(sectionSchema.item_schema || []).map((fieldSchema: any) => {
-                                        // If field has a custom render config, use DynamicRenderer
                                         if (fieldSchema.render) {
                                             return (
                                                 <div key={fieldSchema.name} className="space-y-1">
@@ -424,13 +433,13 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
     const [localSections, setLocalSections] = useState<TemplateSection[]>([]);
     const [isReorderPending, setIsReorderPending] = useState(false);
 
-    // Sync local sections when data changes (unless we have pending changes?)
-    // Actually, if we have pending changes, we don't want to overwrite them if data.html_template re-renders.
-    // But data.html_template only changes on SAVE or Edit.
     useEffect(() => {
         if (!isReorderPending && data.html_template) {
-            const parsed = parseTemplateSections(data.html_template);
-            // Filter custom sections logic moved here to keep consistent
+            const parsed = parseTemplateSections(
+                data.html_template,
+                data.resume_data,  // Pass resume data
+                data.form_schema   // Pass form schema
+            );
             const filtered = parsed.filter(s => {
                 if (s.type === 'custom') {
                     return data.resume_data?.customSections?.length > 0;
@@ -439,44 +448,43 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
             });
             setLocalSections(filtered);
         }
-    }, [data.html_template, data.resume_data, isReorderPending]);
+    }, [data.html_template, data.resume_data, data.form_schema, isReorderPending]);
+
+    // DnD Sensors
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    );
+
+    const handleDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+
+        setLocalSections((items) => {
+            const oldIndex = items.findIndex((i) => i.id === active.id);
+            const newIndex = items.findIndex((i) => i.id === over.id);
+            const newOrder = arrayMove(items, oldIndex, newIndex);
+
+            // Check if we moved across slots (e.g. sidebar to main) - though we'll prevent this via SortableContext separation if needed
+            // For now, we assume visual order implies slot order if containers were separate.
+            // But since we use one localSections array, we just reorder it.
+            // Wait, if we use separate SortableContexts, we can't drag between them easily without strict ID management.
+            // existing logic split them by 'slot'.
+
+            setIsReorderPending(true);
+            return newOrder;
+        });
+    };
 
     const renderLayoutEditor = () => {
-        // Use localSections for rendering the UI
         const sidebarSections = localSections.filter(s => s.slot === 'sidebar');
         const mainSections = localSections.filter(s => s.slot !== 'sidebar');
         const hasSidebar = sidebarSections.length > 0;
 
-        // VISUAL ONLY Reorder Handler
-        const onReorderVisual = (reorderedSubset: TemplateSection[]) => {
-            // Determine if we are reordering Sidebar or Main
-            // We assume reorderedSubset is EITHER Sidebar OR Main items
-            if (reorderedSubset.length === 0) return;
-
-            const isSidebarMove = reorderedSubset[0].slot === 'sidebar';
-
-            let newFullOrder: TemplateSection[] = [];
-
-            if (isSidebarMove) {
-                // Keep Main as is, replace sidebar with new order
-                newFullOrder = [...mainSections, ...reorderedSubset];
-            } else {
-                // Keep Sidebar as is, replace main with new order
-                newFullOrder = [...reorderedSubset, ...sidebarSections];
-            }
-
-            setLocalSections(newFullOrder);
-            setIsReorderPending(true);
-        };
-
-        // ACTUAL AI COMMITER
         const applyReorder = async () => {
             setIsReordering(true);
             try {
-                // Send JUST the IDs to the backend
                 const orderIds = localSections.map(s => s.id);
-
-                // API Call
                 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
                 const response = await fetch(`${API_URL}/reorder`, {
                     method: 'POST',
@@ -492,7 +500,7 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
                 const result = await response.json();
                 if (result.html) {
                     onChange({ ...data, html_template: result.html });
-                    setIsReorderPending(false); // Reset pending state
+                    setIsReorderPending(false);
                 }
             } catch (err) {
                 console.error("Reorder error:", err);
@@ -501,14 +509,7 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
             }
         };
 
-        // Rename section handler
-        const handleRenameSection = (section: TemplateSection, newName: string) => {
-            // Visual only
-        };
-
-        // Delete section handler
         const handleDeleteSection = (section: TemplateSection) => {
-            // Confirm logic is now in the parser for safety, but UI needs to trigger it
             setDeleteConfirm({
                 type: 'template_section',
                 index: -1,
@@ -517,68 +518,14 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
             });
         };
 
-        const SectionItem = ({ section, isCompact = false }: { section: TemplateSection, isCompact?: boolean }) => (
-            <Reorder.Item
-                key={section.id}
-                value={section}
-                whileDrag={{
-                    scale: 1.02,
-                    boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
-                    zIndex: 50
-                }}
-                className={`flex items-center ${isCompact ? 'gap-2 p-2' : 'gap-3 p-3'} bg-[var(--bg-root)] border border-[var(--border-dim)] rounded hover:border-[var(--accent-primary)] transition-colors cursor-grab active:cursor-grabbing group`}
-            >
-                {/* Drag Handle */}
-                <div className={`text-[var(--text-muted)] group-hover:text-[var(--accent-primary)] transition-colors opacity-50 ${isCompact ? 'p-1' : 'p-2'}`}>
-                    <GripVertical className={isCompact ? "w-4 h-4" : "w-5 h-5"} />
-                </div>
-
-                {/* Section Info */}
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    {/* Editable Name (Visual Only) */}
-                    <input
-                        type="text"
-                        defaultValue={section.name}
-                        readOnly
-                        title="Renaming disabled in safety mode"
-                        className={`font-bold text-[var(--text-main)] bg-transparent border-b border-transparent focus:outline-none w-full truncate transition-colors opacity-90 cursor-not-allowed ${isCompact ? 'text-xs' : 'text-sm'}`}
-                        onClick={(e) => e.stopPropagation()}
-                    />
-                    <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-dim)] truncate max-w-full">{section.type}</span>
-                    </div>
-                </div>
-
-                {/* Delete Button */}
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteSection(section);
-                    }}
-                    className={`text-[var(--text-muted)] hover:text-[var(--accent-error)] hover:bg-[var(--accent-error)]/10 rounded transition-colors opacity-0 group-hover:opacity-100 ${isCompact ? 'p-1.5' : 'p-2'}`}
-                    title="Delete Section"
-                >
-                    <Trash2 className={isCompact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-                </button>
-            </Reorder.Item>
-        );
-
         return (
-            <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-4 p-6 relative"
-            >
-                {/* AI Reorder Loading Overlay (Brutalist Style) */}
+            <div className="space-y-4 p-6 relative animate-in fade-in slide-in-from-right-4 duration-300">
                 {isReordering && (
                     <LoadingOverlay message="PROCESSING" subMessage="RESTRUCTURING_HTML_NODES..." />
                 )}
 
-                {/* Confirm Changes Info Bar (Brutalist Style) */}
                 {isReorderPending && (
-                    <div className="border-2 border-[var(--accent-primary)] bg-[var(--bg-surface)] p-3 shadow-[4px_4px_0px_0px_var(--accent-primary)] mb-6 animate-in fade-in slide-in-from-top-2">
+                    <div className="border-2 border-[var(--accent-primary)] bg-[var(--bg-surface)] p-3 shadow-[4px_4px_0px_0px_var(--accent-primary)] mb-6 animate-pulse">
                         <div className="flex flex-col gap-3">
                             <div className="flex items-center gap-2 text-sm font-bold font-mono text-[var(--text-main)] uppercase tracking-tight">
                                 <AlertTriangle size={16} className="text-[var(--accent-primary)]" />
@@ -600,272 +547,333 @@ export default function FormEditor({ data, onChange, disabled }: FormEditorProps
                         </div>
                     </div>
                 )}
-                {/* Intro/Helper Text (Optional, removed Safety Mode warning) */}
 
-                {hasSidebar ? (
-                    <div className="space-y-6">
-                        {/* MAIN CONTENT ROW */}
-                        <div className="bg-[var(--bg-surface)] p-3 rounded border border-[var(--border-dim)] space-y-3">
-                            <div className="flex items-center gap-2 text-[var(--text-muted)] font-mono text-xs uppercase border-b border-[var(--border-dim)] pb-2 mb-2">
-                                <Columns size={14} /> Main Content
+                <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                >
+                    {hasSidebar ? (
+                        <div className="space-y-6">
+                            {/* MAIN CONTENT ROW */}
+                            <div className="bg-[var(--bg-surface)] p-3 rounded border border-[var(--border-dim)] space-y-3">
+                                <div className="flex items-center gap-2 text-[var(--text-muted)] font-mono text-xs uppercase border-b border-[var(--border-dim)] pb-2 mb-2">
+                                    <Columns size={14} /> Main Content
+                                </div>
+                                <SortableContext items={mainSections.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                                    <div className="space-y-2 min-h-[50px]">
+                                        {mainSections.map(s => (
+                                            <SortableSectionItem key={s.id} section={s} onDelete={() => handleDeleteSection(s)} />
+                                        ))}
+                                    </div>
+                                </SortableContext>
                             </div>
-                            <Reorder.Group axis="y" values={mainSections} onReorder={onReorderVisual} className="space-y-2 min-h-[50px]">
-                                {mainSections.map(s => <SectionItem key={s.id} section={s} />)}
-                            </Reorder.Group>
+
+                            {/* SIDEBAR ROW */}
+                            <div className="bg-[var(--bg-surface)] p-3 rounded border border-[var(--border-dim)] space-y-3">
+                                <div className="flex items-center gap-2 text-[var(--text-muted)] font-mono text-xs uppercase border-b border-[var(--border-dim)] pb-2 mb-2">
+                                    <Sidebar size={14} /> Sidebar
+                                </div>
+                                <SortableContext items={sidebarSections.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                                    <div className="space-y-2 min-h-[50px]">
+                                        {sidebarSections.map(s => (
+                                            <SortableSectionItem key={s.id} section={s} onDelete={() => handleDeleteSection(s)} isCompact={true} />
+                                        ))}
+                                    </div>
+                                </SortableContext>
+                            </div>
                         </div>
-
-                        {/* SIDEBAR ROW */}
-                        <div className="bg-[var(--bg-surface)] p-3 rounded border border-[var(--border-dim)] space-y-3">
-                            <div className="flex items-center gap-2 text-[var(--text-muted)] font-mono text-xs uppercase border-b border-[var(--border-dim)] pb-2 mb-2">
-                                <Sidebar size={14} /> Sidebar
+                    ) : (
+                        <SortableContext items={localSections.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                            <div className="space-y-2">
+                                {localSections.map((section) => (
+                                    <SortableSectionItem key={section.id} section={section} onDelete={() => handleDeleteSection(section)} />
+                                ))}
                             </div>
-                            <Reorder.Group axis="y" values={sidebarSections} onReorder={onReorderVisual} className="space-y-2 min-h-[50px]">
-                                {sidebarSections.map(s => <SectionItem key={s.id} section={s} isCompact={true} />)}
-                            </Reorder.Group>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="space-y-2">
-                        <Reorder.Group axis="y" values={localSections} onReorder={onReorderVisual} className="space-y-2">
-                            {localSections.map((section) => <SectionItem key={section.id} section={section} />)}
-                        </Reorder.Group>
+                        </SortableContext>
+                    )}
+                </DndContext>
 
-                        {localSections.length === 0 && (
-                            <div className="text-center p-8 text-[var(--text-muted)] border border-dashed border-[var(--border-dim)] rounded">
-                                No reorderable sections found.
-                            </div>
-                        )}
+                {!hasSidebar && localSections.length === 0 && (
+                    <div className="text-center p-8 text-[var(--text-muted)] border border-dashed border-[var(--border-dim)] rounded">
+                        No reorderable sections found.
                     </div>
                 )}
-            </motion.div>
+            </div>
         );
     };
 
     return (
         <div className={disabled ? "opacity-50 pointer-events-none grayscale transition-all duration-300" : "transition-all duration-300"}>
-            {/* TAB SWITCHER with animated underline */}
+            {/* TAB SWITCHER */}
             <div className="sticky top-0 z-10 bg-[var(--bg-root)] border-b border-[var(--border-dim)] flex items-center px-6 relative">
                 <button
                     onClick={() => setActiveTab('content')}
                     className={`h-14 px-4 text-sm font-bold transition-colors relative ${activeTab === 'content' ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'}`}
                 >
                     CONTENT EDITOR
-                    {activeTab === 'content' && (
-                        <motion.div
-                            layoutId="activeTabIndicator"
-                            className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--text-main)]"
-                            transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        />
-                    )}
+                    <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--text-main)] origin-left scale-x-0 transition-transform" />
                 </button>
                 <button
                     onClick={() => setActiveTab('layout')}
                     className={`h-14 px-4 text-sm font-bold transition-colors relative ${activeTab === 'layout' ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'}`}
                 >
                     PAGE LAYOUT
-                    {activeTab === 'layout' && (
-                        <motion.div
-                            layoutId="activeTabIndicator"
-                            className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--text-main)]"
-                            transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        />
-                    )}
                 </button>
+
+                {/* Visual Indicator managed by AnimeJS Hook */}
+                <div
+                    ref={tabLineRef}
+                    className="absolute bottom-0 h-0.5 bg-[var(--text-main)] pointer-events-none"
+                    style={{ left: activeTab === 'content' ? '24px' : '150px', width: '120px' }} // Approximate pos, will be refined if needed or kept simple
+                />
             </div>
 
-            <AnimatePresence mode="wait">
-                {activeTab === 'layout' ? (
-                    <motion.div key="layout" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                        {renderLayoutEditor()}
-                    </motion.div>
-                ) : (
-                    <motion.div key="content" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.2 }}>
-                        <div className="p-6 pb-20 space-y-px bg-[var(--border-dim)]"> {/* Gap using 1px border color background */}
-
-                            {/* Personal Details */}
-                            <Section
-                                id="basics"
-                                title="Personal Information"
-                                isExpanded={expandedSections.has('basics')}
-                                onToggle={() => toggleSection('basics')}
-                            >
-                                <div className="space-y-4">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <Input label="Full Name" value={resumeData.basics?.name} onChange={(v: string) => updateBasics('name', v)} />
-                                        <Input label="Job Title" value={resumeData.basics?.label} onChange={(v: string) => updateBasics('label', v)} />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <Input label="Email" value={resumeData.basics?.email} onChange={(v: string) => updateBasics('email', v)} />
-                                        <Input label="Phone" value={resumeData.basics?.phone} onChange={(v: string) => updateBasics('phone', v)} />
-                                    </div>
-                                    <Input
-                                        label="Location"
-                                        value={typeof resumeData.basics?.location === 'string' ? resumeData.basics.location : resumeData.basics?.location?.address}
-                                        onChange={(v: string) => updateBasics('location', v)}
-                                    />
-
-                                    {/* Profile Picture Upload */}
-                                    <ImageUpload
-                                        label="Profile Picture"
-                                        value={resumeData.basics?.image || ''}
-                                        onChange={(v: string) => updateBasics('image', v)}
-                                        shape="circle"
-                                    />
-
-                                    <div className="pt-2 border-t border-[var(--border-dim)]">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <span className="mono-label">SOCIAL PROFILES</span>
-                                            <button onClick={() => {
-                                                const profiles = resumeData.basics?.profiles || [];
-                                                onChange({
-                                                    ...data,
-                                                    resume_data: { ...resumeData, basics: { ...resumeData.basics, profiles: [...profiles, { network: '', url: '' }] } }
-                                                });
-                                            }} className="text-xs text-[var(--accent-primary)] font-mono hover:underline">+ ADD</button>
-                                        </div>
-                                        <div className="space-y-2">
-                                            {(resumeData.basics?.profiles || []).map((profile: any, idx: number) => (
-                                                <div key={idx} className="flex gap-2">
-                                                    <input className="input-tech w-24 h-8 px-2" value={profile.network || ''} placeholder="Type" onChange={(e) => {
-                                                        const profiles = [...(resumeData.basics?.profiles || [])];
-                                                        profiles[idx] = { ...profiles[idx], network: e.target.value };
-                                                        updateBasics('profiles', profiles as any);
-                                                    }} />
-                                                    <input className="input-tech flex-1 h-8 px-2" value={profile.url || ''} placeholder="URL" onChange={(e) => {
-                                                        const profiles = [...(resumeData.basics?.profiles || [])];
-                                                        profiles[idx] = { ...profiles[idx], url: e.target.value };
-                                                        updateBasics('profiles', profiles as any);
-                                                    }} />
-                                                    <button onClick={() => {
-                                                        const profiles = [...(resumeData.basics?.profiles || [])];
-                                                        profiles.splice(idx, 1);
-                                                        updateBasics('profiles', profiles as any);
-                                                    }} className="text-[var(--text-muted)] hover:text-[var(--accent-error)]"><Trash2 size={16} /></button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <TextArea label="Summary" value={resumeData.basics?.summary} onChange={(v: string) => updateBasics('summary', v)} />
-                                </div>
-                            </Section>
-
-                            {/* Dynamic Sections */}
-                            {schemaSections.map((sectionSchema: any) => renderDynamicSection(sectionSchema))}
-
-                            {/* Custom Sections */}
-                            {customSections.map((section: any, sectionIndex: number) => (
-                                <Section
-                                    key={section.key || `custom_${sectionIndex} `}
-                                    title={section.title}
-                                    isExpanded={expandedSections.has(section.key)}
-                                    onToggle={() => toggleSection(section.key)}
-                                    onAdd={() => addCustomSectionItem(sectionIndex)}
-                                    onRemoveSection={() => removeCustomSection(sectionIndex)}
-                                    count={section.items?.length || 0}
-                                >
-                                    {/* Render custom items similar to dynamic sections, omitted for brevity but using same "tech" inputs */}
-                                    {section.type === 'text-list' ? (
-                                        <div className="space-y-2">
-                                            {(section.items || []).map((item: any, i: number) => (
-                                                <div key={i} className="flex gap-2">
-                                                    <input className="input-tech flex-1 h-9 px-3" value={item.description || item.title || ''} onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'description', e.target.value)} placeholder="Item text..." />
-                                                    <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)] px-2"><Trash2 size={14} /></button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : section.type === 'detailed' ? (
-                                        <div className="space-y-4">
-                                            {(Array.isArray(section.items) ? section.items : []).map((item: any, i: number) => (
-                                                <div key={i} className="p-3 border border-[var(--border-dim)] bg-[var(--bg-root)] space-y-2 rounded-sm">
-                                                    <div className="flex justify-between items-center pb-2 border-b border-[var(--border-dim)] mb-2">
-                                                        <span className="mono-label">ITEM #{i + 1}</span>
-                                                        <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)]"><Trash2 size={14} /></button>
-                                                    </div>
-                                                    <Input label="Title" value={item.title} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'title', v)} />
-                                                    <Input label="Subtitle" value={item.subtitle} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'subtitle', v)} />
-                                                    <div className="space-y-1">
-                                                        <label className="mono-label block">Date</label>
-                                                        <input
-                                                            type="date"
-                                                            className="input-tech w-full"
-                                                            value={item.date || ''}
-                                                            onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'date', e.target.value)}
-                                                        />
-                                                    </div>
-                                                    <TextArea label="Description" value={item.description} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'description', v)} />
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        /* Tags or Skill Bars */
-                                        <div className="space-y-2">
-                                            {(Array.isArray(section.items) ? section.items : []).map((item: any, i: number) => (
-                                                <div key={i} className="flex items-center gap-2 p-2 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-sm">
-                                                    <input className="input-tech flex-1 h-8 px-2 min-w-0" value={item.name || ''} onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'name', e.target.value)} placeholder="Skill/Tag Name" />
-                                                    {section.type === 'skill-bars' && (
-                                                        <div className="flex items-center gap-2 shrink-0">
-                                                            <input type="range" className="w-24 accent-[var(--text-main)]" value={item.level || 0} max="100" onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'level', parseInt(e.target.value))} />
-                                                            <span className="font-mono text-xs w-8 text-right">{item.level}%</span>
-                                                        </div>
-                                                    )}
-                                                    <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)] px-2"><Trash2 size={14} /></button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </Section>
-                            ))}
-
-                            {/* Add Section Button */}
-                            <div className="bg-[var(--bg-surface)] p-4">
-                                {!showAddSection ? (
-                                    <button onClick={() => setShowAddSection(true)} className="w-full py-2 border border-dashed border-[var(--border-mid)] text-[var(--text-muted)] text-sm font-mono hover:border-[var(--text-main)] hover:text-[var(--text-main)] transition-colors">
-                                        + ADD CUSTOM SECTION
-                                    </button>
-                                ) : (
-                                    <div className="bg-[var(--bg-root)] border border-[var(--border-dim)] p-4 space-y-4">
-                                        <span className="mono-label">NEW SECTION CONFIG</span>
-                                        <Input label="Title" value={newSectionTitle} onChange={setNewSectionTitle} />
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {CUSTOM_SECTION_TYPES.map(type => (
-                                                <button
-                                                    key={type.id}
-                                                    onClick={() => setNewSectionType(type.id)}
-                                                    className={`text - left p - 2 border text - xs font - mono transition - colors ${newSectionType === type.id ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-[var(--border-dim)] text-[var(--text-muted)]'} `}
-                                                >
-                                                    {type.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <button onClick={addCustomSection} className="btn-tech-primary text-xs">CREATE</button>
-                                            <button onClick={() => setShowAddSection(false)} className="btn-tech-secondary text-xs">CANCEL</button>
-                                        </div>
-                                    </div>
-                                )}
+            {activeTab === 'layout' ? (
+                renderLayoutEditor()
+            ) : (
+                <div className="p-6 pb-20 space-y-px bg-[var(--border-dim)] animate-in fade-in slide-in-from-left-4 duration-300">
+                    <Section
+                        id="basics"
+                        title="Personal Information"
+                        isExpanded={expandedSections.has('basics')}
+                        onToggle={() => toggleSection('basics')}
+                    >
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <Input label="Full Name" value={resumeData.basics?.name} onChange={(v: string) => updateBasics('name', v)} />
+                                <Input label="Job Title" value={resumeData.basics?.label} onChange={(v: string) => updateBasics('label', v)} />
                             </div>
-
+                            <div className="grid grid-cols-2 gap-4">
+                                <Input label="Email" value={resumeData.basics?.email} onChange={(v: string) => updateBasics('email', v)} />
+                                <Input label="Phone" value={resumeData.basics?.phone} onChange={(v: string) => updateBasics('phone', v)} />
+                            </div>
+                            <Input
+                                label="Location"
+                                value={typeof resumeData.basics?.location === 'string' ? resumeData.basics.location : resumeData.basics?.location?.address}
+                                onChange={(v: string) => updateBasics('location', v)}
+                            />
+                            <ImageUpload
+                                label="Profile Picture"
+                                value={resumeData.basics?.image || ''}
+                                onChange={(v: string) => updateBasics('image', v)}
+                                shape="circle"
+                            />
+                            <div className="pt-2 border-t border-[var(--border-dim)]">
+                                <div className="flex items-center justify-between mb-3">
+                                    <span className="mono-label">SOCIAL PROFILES</span>
+                                    <AnimatedButton variant="ghost" className="text-xs" onClick={() => {
+                                        const profiles = resumeData.basics?.profiles || [];
+                                        onChange({
+                                            ...data,
+                                            resume_data: { ...resumeData, basics: { ...resumeData.basics, profiles: [...profiles, { network: '', url: '' }] } }
+                                        });
+                                    }}>+ ADD</AnimatedButton>
+                                </div>
+                                <div className="space-y-2">
+                                    {(resumeData.basics?.profiles || []).map((profile: any, idx: number) => (
+                                        <div key={idx} className="flex gap-2">
+                                            <input className="input-tech w-24 h-8 px-2" value={profile.network || ''} placeholder="Type" onChange={(e) => {
+                                                const profiles = [...(resumeData.basics?.profiles || [])];
+                                                profiles[idx] = { ...profiles[idx], network: e.target.value };
+                                                updateBasics('profiles', profiles as any);
+                                            }} />
+                                            <input className="input-tech flex-1 h-8 px-2" value={profile.url || ''} placeholder="URL" onChange={(e) => {
+                                                const profiles = [...(resumeData.basics?.profiles || [])];
+                                                profiles[idx] = { ...profiles[idx], url: e.target.value };
+                                                updateBasics('profiles', profiles as any);
+                                            }} />
+                                            <button onClick={() => {
+                                                const profiles = [...(resumeData.basics?.profiles || [])];
+                                                profiles.splice(idx, 1);
+                                                updateBasics('profiles', profiles as any);
+                                            }} className="text-[var(--text-muted)] hover:text-[var(--accent-error)]"><Trash2 size={16} /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <TextArea label="Summary" value={resumeData.basics?.summary} onChange={(v: string) => updateBasics('summary', v)} />
                         </div>
+                    </Section>
 
-                        <ConfirmationModal
-                            isOpen={!!deleteConfirm}
-                            onClose={() => setDeleteConfirm(null)}
-                            onConfirm={handleConfirmDelete}
-                            title="Delete Section"
-                            message={`Are you sure you want to delete "${deleteConfirm?.title || 'this section'}"? This cannot be undone.`}
-                            confirmText="Delete"
-                            isDestructive={true}
-                        />
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    {schemaSections.map((sectionSchema: any) => renderDynamicSection(sectionSchema))}
+
+                    {customSections.map((section: any, sectionIndex: number) => (
+                        <Section
+                            key={section.key || `custom_${sectionIndex} `}
+                            title={section.title}
+                            isExpanded={expandedSections.has(section.key)}
+                            onToggle={() => toggleSection(section.key)}
+                            onAdd={() => addCustomSectionItem(sectionIndex)}
+                            onRemoveSection={() => removeCustomSection(sectionIndex)}
+                            count={section.items?.length || 0}
+                        >
+                            {section.type === 'text-list' ? (
+                                <div className="space-y-2">
+                                    {(section.items || []).map((item: any, i: number) => (
+                                        <div key={i} className="flex gap-2">
+                                            <input className="input-tech flex-1 h-9 px-3" value={item.description || item.title || ''} onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'description', e.target.value)} placeholder="Item text..." />
+                                            <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)] px-2"><Trash2 size={14} /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : section.type === 'detailed' ? (
+                                <div className="space-y-4">
+                                    {(Array.isArray(section.items) ? section.items : []).map((item: any, i: number) => (
+                                        <div key={i} className="p-3 border border-[var(--border-dim)] bg-[var(--bg-root)] space-y-2 rounded-sm">
+                                            <div className="flex justify-between items-center pb-2 border-b border-[var(--border-dim)] mb-2">
+                                                <span className="mono-label">ITEM #{i + 1}</span>
+                                                <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)]"><Trash2 size={14} /></button>
+                                            </div>
+                                            <Input label="Title" value={item.title} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'title', v)} />
+                                            <Input label="Subtitle" value={item.subtitle} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'subtitle', v)} />
+                                            <div className="space-y-1">
+                                                <label className="mono-label block">Date</label>
+                                                <input
+                                                    type="date"
+                                                    className="input-tech w-full"
+                                                    value={item.date || ''}
+                                                    onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'date', e.target.value)}
+                                                />
+                                            </div>
+                                            <TextArea label="Description" value={item.description} onChange={(v: string) => updateCustomSectionItem(sectionIndex, i, 'description', v)} />
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {(Array.isArray(section.items) ? section.items : []).map((item: any, i: number) => (
+                                        <div key={i} className="flex items-center gap-2 p-2 bg-[var(--bg-root)] border border-[var(--border-dim)] rounded-sm">
+                                            <input className="input-tech flex-1 h-8 px-2 min-w-0" value={item.name || ''} onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'name', e.target.value)} placeholder="Skill/Tag Name" />
+                                            {section.type === 'skill-bars' && (
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <input type="range" className="w-24 accent-[var(--text-main)]" value={item.level || 0} max="100" onChange={(e) => updateCustomSectionItem(sectionIndex, i, 'level', parseInt(e.target.value))} />
+                                                    <span className="font-mono text-xs w-8 text-right">{item.level}%</span>
+                                                </div>
+                                            )}
+                                            <button onClick={() => removeCustomSectionItem(sectionIndex, i)} className="text-[var(--text-muted)] hover:text-[var(--accent-error)] px-2"><Trash2 size={14} /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </Section>
+                    ))}
+
+                    <div className="bg-[var(--bg-surface)] p-4">
+                        {!showAddSection ? (
+                            <button onClick={() => setShowAddSection(true)} className="w-full py-2 border border-dashed border-[var(--border-mid)] text-[var(--text-muted)] text-sm font-mono hover:border-[var(--text-main)] hover:text-[var(--text-main)] transition-colors">
+                                + ADD CUSTOM SECTION
+                            </button>
+                        ) : (
+                            <div className="bg-[var(--bg-root)] border border-[var(--border-dim)] p-4 space-y-4">
+                                <span className="mono-label">NEW SECTION CONFIG</span>
+                                <Input label="Title" value={newSectionTitle} onChange={setNewSectionTitle} />
+                                <div className="grid grid-cols-2 gap-2">
+                                    {CUSTOM_SECTION_TYPES.map(type => (
+                                        <button
+                                            key={type.id}
+                                            onClick={() => setNewSectionType(type.id)}
+                                            className={`text-left p-2 border text-xs font-mono transition-colors ${newSectionType === type.id ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-[var(--border-dim)] text-[var(--text-muted)]'} `}
+                                        >
+                                            {type.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <AnimatedButton onClick={addCustomSection} variant="primary" className="text-xs">CREATE</AnimatedButton>
+                                    <AnimatedButton onClick={() => setShowAddSection(false)} variant="secondary" className="text-xs">CANCEL</AnimatedButton>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                </div>
+            )}
+
+            <ConfirmationModal
+                isOpen={!!deleteConfirm}
+                onClose={() => setDeleteConfirm(null)}
+                onConfirm={handleConfirmDelete}
+                title="Delete Section"
+                message={`Are you sure you want to delete "${deleteConfirm?.title || 'this section'}"? This cannot be undone.`}
+                confirmText="Delete"
+                isDestructive={true}
+            />
         </div>
     );
 }
 
-// Tech-styled Section
+// Subcomponents
+
+function SortableSectionItem({ section, onDelete, isCompact }: { section: TemplateSection, onDelete: () => void, isCompact?: boolean }) {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+        isDragging
+    } = useSortable({ id: section.id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 10 : 1,
+        opacity: isDragging ? 0.8 : 1
+    };
+
+    return (
+        <div
+            ref={setNodeRef}
+            style={style}
+            className={`flex items-center ${isCompact ? 'gap-2 p-2' : 'gap-3 p-3'} bg-[var(--bg-root)] border border-[var(--border-dim)] rounded hover:border-[var(--accent-primary)] transition-colors cursor-default group relative ${isDragging ? 'shadow-xl scale-[1.02]' : ''}`}
+        >
+            {/* Drag Handle */}
+            <div className={`text-[var(--text-muted)] group-hover:text-[var(--accent-primary)] transition-colors opacity-50 cursor-grab active:cursor-grabbing hover:opacity-100 ${isCompact ? 'p-1' : 'p-2'}`} {...listeners} {...attributes}>
+                <GripVertical className={isCompact ? "w-4 h-4" : "w-5 h-5"} />
+            </div>
+
+            {/* Section Info */}
+            <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <input
+                    type="text"
+                    defaultValue={section.name}
+                    readOnly
+                    className={`font-bold text-[var(--text-main)] bg-transparent border-b border-transparent focus:outline-none w-full truncate transition-colors opacity-90 cursor-not-allowed ${isCompact ? 'text-xs' : 'text-sm'}`}
+                    onClick={(e) => e.stopPropagation()}
+                />
+                <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase bg-[var(--bg-surface)] px-1.5 py-0.5 rounded border border-[var(--border-dim)] truncate max-w-full">{section.type}</span>
+                </div>
+            </div>
+
+            {/* Delete Button */}
+            <button
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                }}
+                className={`text-[var(--text-muted)] hover:text-[var(--accent-error)] hover:bg-[var(--accent-error)]/10 rounded transition-colors opacity-0 group-hover:opacity-100 ${isCompact ? 'p-1.5' : 'p-2'}`}
+                title="Delete Section"
+            >
+                <Trash2 className={isCompact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            </button>
+        </div>
+    );
+}
+
 function Section({ id, title, children, onAdd, onRemoveSection, isExpanded, onToggle, count }: any) {
+    const { ref: contentRef } = useAnime<HTMLDivElement>({
+        height: isExpanded ? [0, 'auto'] : 0,
+        opacity: isExpanded ? [0, 1] : 0,
+        duration: 250,
+        easing: 'easeOutQuad'
+    }, [isExpanded]);
+
+    // Since animejs overrides styles inline, we might need to be careful.
+    // Actually, conditional rendering + simple CSS transition is better for height sometimes, but let's try animejs as requested.
+    // However, for correct height calc, 'auto' works well with animejs.
+
     return (
         <div className="bg-[var(--bg-card)]">
             <div
@@ -890,16 +898,20 @@ function Section({ id, title, children, onAdd, onRemoveSection, isExpanded, onTo
                     )}
                 </div>
             </div>
-            {isExpanded && (
-                <div className="p-4 border-t border-[var(--border-dim)]">
+
+            {/* We keep the div in DOM but animate it */}
+            <div
+                className="overflow-hidden border-t border-[var(--border-dim)]"
+                style={{ height: isExpanded ? 'auto' : 0, display: isExpanded ? 'block' : 'none' }} // Initial state helper
+            >
+                <div className="p-4">
                     {children}
                 </div>
-            )}
+            </div>
         </div>
     );
 }
 
-// Tech Input
 function Input({ label, value, onChange, placeholder }: any) {
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     return (
@@ -935,9 +947,6 @@ function Input({ label, value, onChange, placeholder }: any) {
 
 function TextArea({ label, value, onChange }: any) {
     const [isEditorOpen, setIsEditorOpen] = useState(false);
-
-    // Check if content looks like HTML (optimized regex)
-    // If it has HTML tags, we treat it as rich text.
     const isHtml = /<[a-z][\s\S]*>/i.test(value || '');
 
     return (
@@ -945,7 +954,6 @@ function TextArea({ label, value, onChange }: any) {
             <div className="flex justify-between items-center">
                 <label className="mono-label block">{label}</label>
                 <div className="flex items-center gap-2">
-                    {/* Clear visual indicator if rich text */}
                     {isHtml && <span className="text-[10px] text-[var(--accent-primary)] font-mono uppercase bg-[var(--bg-root)] border border-[var(--accent-primary)] px-1 rounded">Rich Text</span>}
                     <button
                         onClick={() => setIsEditorOpen(true)}
@@ -958,24 +966,14 @@ function TextArea({ label, value, onChange }: any) {
                 </div>
             </div>
 
-            {/* Hybrid Input Area */}
             {isHtml ? (
-                /* HTML Preview (Read Only) - Allows text selection, does NOT auto-open modal */
-                <div
-                    className="input-tech w-full min-h-[80px] text-sm pr-2 bg-[var(--bg-root)] overflow-hidden relative group"
-                >
+                <div className="input-tech w-full min-h-[80px] text-sm pr-2 bg-[var(--bg-root)] overflow-hidden relative group">
                     <div
                         className="prose prose-invert prose-sm max-w-none text-[var(--text-main)] [&>p]:m-0 [&>ul]:m-0 [&>ol]:m-0 opacity-90"
                         dangerouslySetInnerHTML={{ __html: value || '<span class="text-[var(--text-muted)] italic">Empty...</span>' }}
                     />
-
-                    {/* Hover Overlay to suggest editing */}
-                    <div className="absolute inset-0 bg-black/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity flex items-end justify-end p-2">
-                        {/* Visual cue only */}
-                    </div>
                 </div>
             ) : (
-                /* Standard Textarea for plain text edits */
                 <textarea
                     className="input-tech w-full min-h-[80px] text-sm pr-8"
                     value={value || ''}
@@ -995,7 +993,6 @@ function TextArea({ label, value, onChange }: any) {
     );
 }
 
-// Dot Rating Input (●●●○○)
 function DotRating({ value, onChange, maxDots = 5, filledColor = 'var(--accent-primary)', emptyColor = 'var(--border-input)' }: any) {
     const dots = [];
     const filledCount = Math.round((value / 100) * maxDots);
@@ -1005,7 +1002,7 @@ function DotRating({ value, onChange, maxDots = 5, filledColor = 'var(--accent-p
             <button
                 key={i}
                 onClick={() => onChange(Math.round(((i + 1) / maxDots) * 100))}
-                className={`text - 2xl transition - transform hover: scale - 125 cursor - pointer leading - none px - 0.5`}
+                className={`text-2xl transition-transform hover:scale-125 cursor-pointer leading-none px-0.5`}
                 style={{ color: isFilled ? filledColor : emptyColor, opacity: isFilled ? 1 : 0.3 }}
             >●</button>
         );
@@ -1013,7 +1010,6 @@ function DotRating({ value, onChange, maxDots = 5, filledColor = 'var(--accent-p
     return <div className="flex gap-1">{dots}</div>;
 }
 
-// Star Rating Input (★★★☆☆)
 function StarRating({ value, onChange, maxStars = 5, color = 'var(--accent-primary)' }: any) {
     const stars = [];
     const filledCount = Math.round((value / 100) * maxStars);
@@ -1031,7 +1027,6 @@ function StarRating({ value, onChange, maxStars = 5, color = 'var(--accent-prima
     return <div className="flex gap-0.5">{stars}</div>;
 }
 
-// Percentage Input
 function PercentageInput({ value, onChange }: any) {
     return (
         <div className="flex items-center gap-2">
@@ -1048,7 +1043,6 @@ function PercentageInput({ value, onChange }: any) {
     );
 }
 
-// Select Input
 function SelectInput({ value, onChange, options = [] }: any) {
     return (
         <select
@@ -1064,7 +1058,6 @@ function SelectInput({ value, onChange, options = [] }: any) {
     );
 }
 
-// Image Upload Input
 function ImageUpload({ label, value, onChange, shape = 'square' }: { label: string; value: string; onChange: (v: string) => void; shape?: 'square' | 'circle' }) {
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const [isLoading, setIsLoading] = React.useState(false);
@@ -1073,13 +1066,11 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
         const file = e.target.files?.[0];
         if (!file) return;
 
-        // Validate file type
         if (!file.type.startsWith('image/')) {
             alert('Please select an image file');
             return;
         }
 
-        // Validate file size (max 5MB)
         if (file.size > 5 * 1024 * 1024) {
             alert('Image must be under 5MB');
             return;
@@ -1087,7 +1078,6 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
 
         setIsLoading(true);
 
-        // Convert to base64 for local preview (will be replaced with Vercel Blob URL in production)
         const reader = new FileReader();
         reader.onload = (event) => {
             const base64 = event.target?.result as string;
@@ -1119,9 +1109,8 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
         <div className="space-y-2">
             <label className="mono-label block">{label}</label>
             <div className="flex items-start gap-3">
-                {/* Preview */}
                 <div
-                    className={`w - 20 h - 20 border border - [var(--border - dim)]bg - [var(--bg - root)] flex items - center justify - center overflow - hidden cursor - pointer hover: border - [var(--text - main)]transition - colors ${shape === 'circle' ? 'rounded-full' : 'rounded-sm'} `}
+                    className={`w-20 h-20 border border-[var(--border-dim)] bg-[var(--bg-root)] flex items-center justify-center overflow-hidden cursor-pointer hover:border-[var(--text-main)] transition-colors ${shape === 'circle' ? 'rounded-full' : 'rounded-sm'} `}
                     onClick={() => fileInputRef.current?.click()}
                 >
                     {isLoading ? (
@@ -1133,7 +1122,6 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
                     )}
                 </div>
 
-                {/* Actions */}
                 <div className="flex flex-col gap-1">
                     <input
                         ref={fileInputRef}
@@ -1142,26 +1130,14 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
                         onChange={handleFileChange}
                         className="hidden"
                     />
-                    <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:border-[var(--text-main)] transition-colors"
-                    >
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:border-[var(--text-main)] transition-colors">
                         UPLOAD
                     </button>
-                    <button
-                        type="button"
-                        onClick={handleUrlInput}
-                        className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:border-[var(--text-main)] transition-colors"
-                    >
+                    <button type="button" onClick={handleUrlInput} className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:border-[var(--text-main)] transition-colors">
                         URL
                     </button>
                     {value && (
-                        <button
-                            type="button"
-                            onClick={handleRemove}
-                            className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--accent-error)] hover:border-[var(--accent-error)] transition-colors"
-                        >
+                        <button type="button" onClick={handleRemove} className="text-xs font-mono px-2 py-1 border border-[var(--border-dim)] text-[var(--accent-error)] hover:border-[var(--accent-error)] transition-colors">
                             REMOVE
                         </button>
                     )}
@@ -1170,5 +1146,3 @@ function ImageUpload({ label, value, onChange, shape = 'square' }: { label: stri
         </div>
     );
 }
-
-export { ImageUpload };

@@ -22,7 +22,19 @@ export interface TemplateSection {
  * NOTE: Reordering is currently DISABLED because moving Mustache blocks
  * without their surrounding HTML containers causes template corruption.
  */
-export function parseTemplateSections(html: string): TemplateSection[] {
+/**
+ * Parse template sections from HTML and include all sections from resume_data.
+ * This ensures the layout menu shows ALL sections, even if they're empty.
+ * 
+ * @param html - HTML template string
+ * @param resumeData - Optional resume data object containing all sections
+ * @param formSchema - Optional form schema to identify all defined sections
+ */
+export function parseTemplateSections(
+    html: string,
+    resumeData?: any,
+    formSchema?: any
+): TemplateSection[] {
     const sections: TemplateSection[] = [];
     const standardSections = ['work', 'education', 'skills', 'projects', 'certificates', 'awards', 'languages', 'interests', 'references', 'volunteer', 'basics'];
 
@@ -46,9 +58,10 @@ export function parseTemplateSections(html: string): TemplateSection[] {
         }
     });
 
-    // Fallback: Check for HTML structure IDs if no regex slots found? 
-    // For now, we rely on semantic slots or default to 'main'.
+    // Track which sections we found in HTML
+    const foundSections = new Set<string>();
 
+    // Parse sections found in HTML
     standardSections.forEach(sectionName => {
         // Find Mustache block only - no container detection
         const mustacheRegex = new RegExp(`{{#${sectionName}}}([\\s\\S]*?){{\\/${sectionName}}}`, 'g');
@@ -77,6 +90,8 @@ export function parseTemplateSections(html: string): TemplateSection[] {
                 containerHtml: match[0],
                 slot: slot // NEW PROPERTY
             });
+
+            foundSections.add(sectionName);
         }
     });
 
@@ -104,17 +119,54 @@ export function parseTemplateSections(html: string): TemplateSection[] {
             containerHtml: match[0],
             slot: slot
         });
+        foundSections.add('customSections');
     }
 
-    // Default slot assignment if undefined (everything is main if no slots defined, or check columns?)
+    // ADD MISSING SECTIONS FROM FORM SCHEMA
+    // This ensures ALL sections appear in the layout menu, even if they have no content
+    if (formSchema && formSchema.sections) {
+        formSchema.sections.forEach((sectionSchema: any) => {
+            const sectionId = sectionSchema.id;
+            if (!foundSections.has(sectionId)) {
+                // This section exists in the schema but not in HTML
+                // Add it as a placeholder so it appears in the layout menu
+                sections.push({
+                    id: `${sectionId}-placeholder`,
+                    name: sectionSchema.title || (sectionId.charAt(0).toUpperCase() + sectionId.slice(1)),
+                    type: sectionId as any,
+                    containerStart: -1, // Marker for "not in HTML yet"
+                    containerEnd: -1,
+                    containerHtml: '',
+                    slot: sectionSchema.slot || 'main' // Default to main if not specified
+                });
+                foundSections.add(sectionId);
+            }
+        });
+    }
 
-    // POST-PROCESSING: Container Expansion
-    // The detected mustache blocks (e.g. {{#work}}...{{/work}}) usually sit inside a wrapper <div>
-    // that also contains the Header (<h3>Work</h3>). 
-    // If we only move the mustache block, we leave the header behind.
-    // We try to expand the selection to the immediate parent block element if it looks like a section wrapper.
+    // ADD CUSTOM SECTIONS FROM RESUME DATA
+    if (resumeData && resumeData.customSections && resumeData.customSections.length > 0) {
+        if (!foundSections.has('customSections')) {
+            // Custom sections exist in data but not in HTML template yet
+            sections.push({
+                id: 'customSections-data',
+                name: 'Custom Sections',
+                type: 'custom',
+                containerStart: -1,
+                containerEnd: -1,
+                containerHtml: '',
+                slot: 'main'
+            });
+        }
+    }
 
+    // POST-PROCESSING: Container Expansion (only for sections actually in HTML)
     return sections.map(section => {
+        if (section.containerStart === -1) {
+            // This is a placeholder section, don't try to expand
+            return section;
+        }
+
         const expanded = expandToContainer(html, section.containerStart, section.containerEnd);
         if (expanded) {
             return {
@@ -125,7 +177,13 @@ export function parseTemplateSections(html: string): TemplateSection[] {
             };
         }
         return section;
-    }).sort((a, b) => a.containerStart - b.containerStart);
+    }).sort((a, b) => {
+        // Sort: real sections first (by position), then placeholders at end
+        if (a.containerStart === -1 && b.containerStart === -1) return 0;
+        if (a.containerStart === -1) return 1;
+        if (b.containerStart === -1) return -1;
+        return a.containerStart - b.containerStart;
+    });
 }
 
 /**

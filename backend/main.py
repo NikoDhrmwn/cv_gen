@@ -37,7 +37,7 @@ class DiscoverRequest(BaseModel):
     query: str
 
 class GenerateRequest(BaseModel):
-    template_id: str # e.g., "template_1.png"
+    template_id: str # Can be a base64 Data URI or a file path
     query: str
 
 @app.post("/discover")
@@ -49,18 +49,16 @@ async def discover_templates_endpoint(request: DiscoverRequest):
     
     try:
         # Find 3 templates
-        files = await discover_templates(request.query)
+        images = await discover_templates(request.query)
         
         # Format for frontend
         results = []
-        import time
-        ts = int(time.time())
-        for i, filename in enumerate(files):
-            # Filename comes as 'assets/template_1.png', we need just 'template_1.png' for the URL
-            basename = os.path.basename(filename)
+        for i, data_uri in enumerate(images):
+            # We send the full Data URI as both ID and URL.
+            # This makes the frontend stateless regarding image storage.
             results.append({
-                "id": filename, 
-                "url": f"http://localhost:8000/images/{basename}?t={ts}",
+                "id": data_uri,
+                "url": data_uri,
                 "title": f"Option {i+1}",
                 "description": f"Trending {request.query} Style {i+1}"
             })
@@ -75,23 +73,24 @@ async def generate_cv(request: GenerateRequest):
     """
     Phase 2: Generate form from selected template.
     """
-    screenshot_path = request.template_id
+    template_data = request.template_id
     
     # 2. Analysis - Extract form structure from the selected template
     from agents.analysis import analyze_screenshot
     
-    # Verify screenshot exists
-    if not os.path.exists(screenshot_path):
-        # Fallback if specific ID missing
-        if os.path.exists("assets/screenshot.png"):
-             screenshot_path = "assets/screenshot.png"
-        elif os.path.exists("assets/sample_template.png"):
-             screenshot_path = "assets/sample_template.png"
-        else:
-             return {"error": f"Template {screenshot_path} not found and no fallbacks available."}
+    # If it's not a Data URI, check if it's a legacy fallback path
+    if not template_data.startswith("data:"):
+        if not os.path.exists(template_data):
+             # Try fallbacks
+             if os.path.exists("assets/screenshot.png"):
+                  template_data = "assets/screenshot.png"
+             elif os.path.exists("assets/sample_template.png"):
+                  template_data = "assets/sample_template.png"
+             else:
+                  return {"error": f"Template not found and no fallbacks available."}
 
     try:
-        result = analyze_screenshot(screenshot_path)
+        result = analyze_screenshot(template_data)
         if not result:
             return {"error": "Analysis failed - could not parse the template."}
         
@@ -100,7 +99,8 @@ async def generate_cv(request: GenerateRequest):
             "discovery": {
                 "source": "selected",
                 "search_query": request.query,
-                "selected_template": request.template_id
+                # Avoid echoing back the huge base64 string in meta
+                "selected_template": "base64_data" if template_data.startswith("data:") else template_data
             },
             "analyzed_at": datetime.now().isoformat()
         }

@@ -1,6 +1,7 @@
 import os
 import time
 import traceback
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
 from typing import Optional
@@ -12,18 +13,39 @@ load_dotenv()
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 
-def analyze_screenshot(image_path: str) -> Optional[dict]:
+def analyze_screenshot(image_input: str) -> Optional[dict]:
+    """
+    Analyzes a CV template image.
+    :param image_input: Can be a file path OR a base64 data URI string.
+    """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY is not set")
     
     client = genai.Client(api_key=api_key)
     
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Image not found at {image_path}")
+    image_bytes = None
+    mime_type = "image/png"
 
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
+    if image_input.startswith("data:image"):
+        # Handle Base64 Data URI
+        try:
+            # Format: data:image/png;base64,.....
+            header, encoded = image_input.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0]
+            image_bytes = base64.b64decode(encoded)
+        except Exception as e:
+            raise ValueError(f"Invalid base64 image data: {e}")
+    else:
+        # Handle File Path
+        if not os.path.exists(image_input):
+            raise FileNotFoundError(f"Image not found at {image_input}")
+
+        with open(image_input, "rb") as f:
+            image_bytes = f.read()
+
+    if not image_bytes:
+        raise ValueError("Could not process image input")
 
     prompt = """
     You are an expert CV/Resume template designer and frontend developer with FULL CREATIVE FREEDOM.
@@ -433,7 +455,7 @@ def analyze_screenshot(image_path: str) -> Optional[dict]:
                         role="user",
                         parts=[
                             types.Part.from_text(text=prompt),
-                            types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
                         ]
                     )
                 ]

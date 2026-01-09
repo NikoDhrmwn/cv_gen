@@ -1,65 +1,54 @@
 import os
 import shutil
 import time
+import base64
 from typing import List
 import requests
 from duckduckgo_search import DDGS
 
-# Cache to prevent rate limiting
-_last_discovery_time = 0
-_last_query = ""
-_cache_duration = 300  # 5 minutes
-
 async def discover_templates(query: str) -> List[str]:
     """
     Finds 3 distinct trending CV templates for the given query using DuckDuckGo image search API.
-    Returns a list of local file paths (e.g., ["template_1.png", "template_2.png", "template_3.png"]).
-    Uses caching to prevent rate limiting on repeated requests.
+    Returns a list of base64 data URIs.
     """
-    global _last_discovery_time, _last_query
-    
-    # Check if we have valid cached templates (less than 5 minutes old) AND matches query
-    templates_exist = all(os.path.exists(f"assets/template_{i}.png") for i in range(1, 4))
-    time_since_last = time.time() - _last_discovery_time
-    same_query = _last_query == query
-    
-    if templates_exist and time_since_last < _cache_duration and same_query:
-        print(f"Using cached templates for '{query}' (age: {int(time_since_last)}s)")
-        return ["assets/template_1.png", "assets/template_2.png", "assets/template_3.png"]
-    
     current_year = "2025"
-    search_query = f"most recommended {query} resume template format {current_year}"
     
-    discovered_files = []
+    discovered_images = []
     
-    def download_image_from_url(url, filename):
+    def download_image_as_base64(url):
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                with open(filename, 'wb') as f:
-                    f.write(response.content)
-                return True
+                content = response.content
+                if len(content) > 10000: # Min 10KB
+                    mime_type = response.headers.get("Content-Type", "").split(";")[0]
+                    if not mime_type or "image" not in mime_type:
+                        # Fallback simple detection
+                        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+                            mime_type = "image/png"
+                        elif content.startswith(b"\xff\xd8"):
+                            mime_type = "image/jpeg"
+                        elif content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+                            mime_type = "image/webp"
+                        else:
+                            mime_type = "image/png" # Default fallback
+
+                    b64 = base64.b64encode(content).decode('utf-8')
+                    return f"data:{mime_type};base64,{b64}"
         except Exception as e:
             print(f"Failed to download {url}: {e}")
-        return False
+        return None
     
     try:
-        # Clear specific old templates
-        for i in range(1, 4):
-            if os.path.exists(f"assets/template_{i}.png"):
-                os.remove(f"assets/template_{i}.png")
-        
         # Use DuckDuckGo search API directly in a separate thread to avoid loop conflicts
-        # Simplified query for better results
         search_query = f"{query} resume template modern {current_year}"
         print(f"Searching for: {search_query}")
         
         def _sync_search(q):
             # FAST FAIL POLICY: 1 retry, short timeout.
-            # If it fails, fallback immediately rather than hanging user.
             max_retries = 2
             last_err = None
             for attempt in range(max_retries):
@@ -75,7 +64,6 @@ async def discover_templates(query: str) -> List[str]:
                 except Exception as e:
                     last_err = e
                     print(f"DDGS Sync Error (Attempt {attempt+1}/{max_retries}): {e}")
-                    # No sleep needed for fast fail
             print(f"All DDGS attempts failed. Last error: {last_err}")
             return []
 
@@ -89,9 +77,7 @@ async def discover_templates(query: str) -> List[str]:
             
         print(f"Found {len(results)} results from DuckDuckGo")
         
-        print(f"Found {len(results)} image results")
-        
-        # Download up to 3 images asynchronously (using threads for blocking I/O)
+        # Download up to 3 images asynchronously
         successful_downloads = 0
         attempted = 0
         
@@ -109,30 +95,18 @@ async def discover_templates(query: str) -> List[str]:
                 continue
                 
             print(f"[{attempted}/{len(results)}] Downloading: {image_url[:80]}...")
-            target_filename = f"assets/template_{successful_downloads+1}.png"
             
             # Run blocking download in thread
-            # download_image_from_url is blocking, so we await it in executor
-            download_success = await loop.run_in_executor(None, download_image_from_url, image_url, target_filename)
+            data_uri = await loop.run_in_executor(None, download_image_as_base64, image_url)
             
-            if download_success:
-                # Verify file size (should be > 10KB for a real template)
-                try:
-                    import os as os_check
-                    # getsize is fast, local IO, acceptable in loop or wrap it too
-                    if os_check.path.getsize(target_filename) > 10000:
-                        discovered_files.append(target_filename)
-                        successful_downloads += 1
-                        print(f"  -> Saved as {target_filename}")
-                    else:
-                        print(f"  -> File too small, skipping")
-                        os_check.remove(target_filename)
-                except:
-                    pass
+            if data_uri:
+                discovered_images.append(data_uri)
+                successful_downloads += 1
+                print(f"  -> Downloaded successfully")
             else:
-                print(f"  -> Failed to download")
+                print(f"  -> Failed to download or too small")
                 
-        print(f"Successfully downloaded {len(discovered_files)} templates from {attempted} attempts")
+        print(f"Successfully downloaded {len(discovered_images)} templates from {attempted} attempts")
                 
     except Exception as e:
         print(f"Discovery search error: {e}")
@@ -141,34 +115,31 @@ async def discover_templates(query: str) -> List[str]:
     
     # Fallback Logic (Runs if search fails OR finds nothing)
     try:
-        if not discovered_files or len(discovered_files) < 3:
+        if not discovered_images or len(discovered_images) < 3:
             print("Using fallback templates to fill gaps.")
             fallback_sources = ["assets/fallback_1.png", "assets/fallback_2.png", "assets/fallback_3.png"]
             sample_source = "assets/sample_template.png"
             
-            for i in range(1, 4):
-                target = f"assets/template_{i}.png"
-                source = fallback_sources[i-1]
-                
-                if os.path.exists(target) and target in discovered_files:
+            for i in range(3):
+                if i < len(discovered_images):
                     continue
-                    
+
+                source = fallback_sources[i] if i < len(fallback_sources) else sample_source
+
                 if os.path.exists(source):
-                    shutil.copy(source, target)
-                    if target not in discovered_files:
-                        discovered_files.append(target)
-                elif os.path.exists(sample_source):
-                    shutil.copy(sample_source, target)
-                    if target not in discovered_files:
-                        discovered_files.append(target)
+                     with open(source, "rb") as f:
+                        content = f.read()
+                        b64 = base64.b64encode(content).decode('utf-8')
+                        # Simplistic mime detection for local files
+                        ext = os.path.splitext(source)[1][1:]
+                        if ext == "jpg": ext = "jpeg"
+                        discovered_images.append(f"data:image/{ext};base64,{b64}")
                         
-            print(f"Fallback/Fill complete. Available files: {discovered_files}")
+            print(f"Fallback/Fill complete. Total images: {len(discovered_images)}")
 
     except Exception as e:
          print(f"Fallback generation failed: {e}")
+         import traceback
+         traceback.print_exc()
     
-    # Update cache timestamp and query after successful discovery
-    _last_discovery_time = time.time()
-    _last_query = query
-         
-    return sorted(discovered_files)
+    return discovered_images
